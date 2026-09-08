@@ -35,6 +35,9 @@
 #include "GameLogic/TerrainLogic.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Object.h"
+#include "GameLogic/AIPathfind.h"
+#include "GameLogic/Module/AIUpdate.h"
+#include "GameClient/View.h"
 #include "GameClient/Drawable.h"
 #include "GameClient/GadgetListBox.h"
 #include "GameClient/GameClient.h"
@@ -385,6 +388,102 @@ void W3DInGameUI::reset()
 //-------------------------------------------------------------------------------------------------
 /** Draw member for the W3D implementation of the game user interface */
 //-------------------------------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// BOT_PATHS (diagnostic): draw the route a selected unit intends to walk.
+//
+// "Why is this unit 465 units from its goal" has several different answers --
+// the route is genuinely long, it is re-pathing every tick, or the path ends
+// somewhere its job never asked for -- and they are indistinguishable in a
+// log. They are obvious as a line on the ground.
+//
+// Two lines per unit, because the difference between them is diagnostic:
+//   dim   the raw grid path the pathfinder found
+//   bright the OPTIMIZED path, which is what the unit actually follows
+// A unit whose optimized path doubles back, or ends short of the goal, is a
+// pathfinding problem; one whose line is fine but is not moving is not.
+//
+// The engine has its own AI_DEBUG_PATHS mode, which is unavailable to us
+// twice over: it is behind #if defined(RTS_DEBUG), and it draws through
+// addIcon/W3DDebugIcons, whose render object is never constructed in
+// ZeroHour -- so the icons would be written into a null array. worldToScreen
+// plus TheDisplay->drawLine is the release-safe route, and is what the radar
+// and the floating text already use.
+//
+// Off unless BOT_PATHS is set in the environment.
+// ---------------------------------------------------------------------------
+static Bool botPathsEnabled()
+{
+	static Int s_on = -1;
+	if (s_on < 0)
+	{
+		const char *e = getenv("BOT_PATHS");
+		s_on = (e != nullptr && *e != 0 && *e != '0') ? 1 : 0;
+	}
+	return s_on != 0;
+}
+
+static void drawBotPathLine(View *view, const Coord3D *a, const Coord3D *b,
+	Real width, UnsignedInt color)
+{
+	ICoord2D pa, pb;
+	// Only when BOTH ends are on screen: a segment with one end off-frustum
+	// projects to a garbage coordinate and draws a line across the display.
+	if (!view->worldToScreen(a, &pa))
+		return;
+	if (!view->worldToScreen(b, &pb))
+		return;
+	TheDisplay->drawLine(pa.x, pa.y, pb.x, pb.y, width, color);
+}
+
+static void drawSelectedUnitPaths(View *view)
+{
+	if (!botPathsEnabled() || TheInGameUI == nullptr || TheDisplay == nullptr)
+		return;
+
+	const DrawableList *selected = TheInGameUI->getAllSelectedDrawables();
+	if (selected == nullptr)
+		return;
+
+	for (DrawableList::const_iterator it = selected->begin();
+			 it != selected->end(); ++it)
+	{
+		Drawable *draw = *it;
+		if (draw == nullptr)
+			continue;
+		Object *obj = draw->getObject();
+		if (obj == nullptr)
+			continue;
+		AIUpdateInterface *ai = obj->getAIUpdateInterface();
+		if (ai == nullptr)
+			continue;
+		// Non-const: Path::getFirstNode has no const overload.
+		Path *path = ai->getPath();
+		if (path == nullptr)
+			continue;
+
+		// The raw path the pathfinder produced.
+		PathNode *node = path->getFirstNode();
+		const Coord3D *prev = obj->getPosition();
+		for (; node != nullptr; node = node->getNext())
+		{
+			drawBotPathLine(view, prev, node->getPosition(), 1.0f,
+				GameMakeColor(90, 90, 200, 160));
+			prev = node->getPosition();
+		}
+
+		// The optimized path, which is the one actually walked.
+		node = path->getFirstNode();
+		prev = obj->getPosition();
+		for (; node != nullptr; node = node->getNextOptimized())
+		{
+			drawBotPathLine(view, prev, node->getPosition(), 2.0f,
+				GameMakeColor(255, 230, 60, 255));
+			prev = node->getPosition();
+		}
+	}
+}
+
 void W3DInGameUI::draw()
 {
 	TheDisplay->beginBatch();
@@ -407,6 +506,9 @@ void W3DInGameUI::draw()
 
 			// draw move hints
 			drawMoveHints( view );
+
+			// Diagnostic: the route each selected unit intends to walk.
+			drawSelectedUnitPaths( view );
 
 			// draw attack hints
 			drawAttackHints( view );
