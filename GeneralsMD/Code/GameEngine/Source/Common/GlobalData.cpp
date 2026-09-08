@@ -660,6 +660,17 @@ GlobalData::GlobalData()
 	m_chipSetType = 0;
 	m_headless = FALSE;
 	m_checkForUpdates = TRUE;
+	m_observationPort = 0;
+	m_observationInterval = 1;
+	m_observationUnitsOnly = FALSE;
+	m_observationPlayer = -1;
+	m_observationDebug = FALSE;
+	m_combatSandbox = FALSE;
+	m_actionPort = 0;
+	m_actionPlayer = -1;
+	m_skirmishSlots.clear();
+	m_skirmishMap.clear();
+	m_skirmishMaxFrames = 0;
 	m_windowed = 0;
 	m_xResolution = DEFAULT_DISPLAY_WIDTH;
 	m_yResolution = DEFAULT_DISPLAY_HEIGHT;

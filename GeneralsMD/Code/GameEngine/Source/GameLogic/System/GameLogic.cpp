@@ -101,6 +101,8 @@
 #include "GameLogic/CrateSystem.h"
 #include "GameLogic/FPUControl.h"
 #include "GameLogic/GameLogic.h"
+#include "Common/ActionServer.h"
+#include "Common/ObservationServer.h"
 #include "GameLogic/Locomotor.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/Module/AIUpdate.h"
@@ -390,6 +392,18 @@ void GameLogic::destroyAllObjectsImmediate()
 GameLogic::~GameLogic()
 {
 
+	if (TheObservationServer)
+	{
+		delete TheObservationServer;
+		TheObservationServer = nullptr;
+	}
+
+	if (TheActionServer)
+	{
+		delete TheActionServer;
+		TheActionServer = nullptr;
+	}
+
 	// clear any object TOC we might have
 	m_objectTOC.clear();
 
@@ -435,6 +449,27 @@ void GameLogic::init()
 {
 
 	setFPMode();
+
+	// Optional observation stream for external agents; disabled unless a
+	// port was given on the command line.
+	// init() runs again for every new game, so the servers are created only
+	// once and then left alone; recreating them would leak the previous
+	// instance and orphan the listening socket an agent is connected to.
+	if (TheGlobalData->m_observationPort != 0 && TheObservationServer == nullptr)
+	{
+		TheObservationServer = NEW ObservationServer;
+		TheObservationServer->init(TheGlobalData->m_observationPort,
+															 TheGlobalData->m_observationInterval);
+	}
+
+	// Optional order channel for external agents; disabled unless a port was
+	// given on the command line.
+	if (TheGlobalData->m_actionPort != 0 && TheActionServer == nullptr)
+	{
+		TheActionServer = NEW ActionServer;
+		TheActionServer->init(TheGlobalData->m_actionPort,
+													TheGlobalData->m_actionPlayer);
+	}
 
 	// create the partition manager
 	ThePartitionManager = NEW PartitionManager;
@@ -3989,6 +4024,14 @@ void GameLogic::update()
 		TheStatsCollector->update();
 	}
 
+	// Collect any orders from an external agent first, so they land on the
+	// command list for this frame rather than the next one. This must happen
+	// BEFORE the recorder runs: the recorder walks TheCommandList and writes
+	// out the network-range messages it finds, so orders appended after it
+	// would be executed but never recorded, leaving an empty replay.
+	if (TheActionServer)
+		TheActionServer->update();
+
 	// Update the Recorder
 	{
 		TheRecorder->UPDATE();
@@ -4128,6 +4171,11 @@ void GameLogic::update()
 
 
 
+
+	// Publish the finished frame before the counter advances, so an agent
+	// observes the state that m_frame currently describes.
+	if (TheObservationServer)
+		TheObservationServer->update();
 
 	// increment world time
 	if (!m_startNewGame)

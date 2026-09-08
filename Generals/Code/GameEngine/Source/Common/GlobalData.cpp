@@ -647,6 +647,15 @@ GlobalData::GlobalData()
 	m_headless = FALSE;
 	// GeneralsX @feature BenderAI 21/04/2026 Default to TRUE; user can override via Options.ini
 	m_checkForUpdates = TRUE;
+	m_observationPort = 0;
+	m_observationInterval = 1;
+	m_observationUnitsOnly = FALSE;
+	m_observationPlayer = -1;
+	m_actionPort = 0;
+	m_actionPlayer = -1;
+	m_skirmishSlots.clear();
+	m_skirmishMap.clear();
+	m_skirmishMaxFrames = 0;
 	m_windowed = 0;
 	m_xResolution = DEFAULT_DISPLAY_WIDTH;
 	m_yResolution = DEFAULT_DISPLAY_HEIGHT;

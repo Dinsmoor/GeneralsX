@@ -83,6 +83,9 @@ set(GAMEENGINE_SRC
 #    Include/Common/MultiplayerSettings.h
 #    Include/Common/NameKeyGenerator.h
     Include/Common/ObjectStatusTypes.h
+    Include/Common/SkirmishLauncher.h
+    Include/Common/ActionServer.h
+    Include/Common/ObservationServer.h
     Include/Common/OptionPreferences.h
 #    Include/Common/OSDisplay.h
 #    Include/Common/Overridable.h
@@ -586,6 +589,9 @@ set(GAMEENGINE_SRC
 #    Source/Common/GameMain.cpp
     Source/Common/GameUtility.cpp
 #    Source/Common/GlobalData.cpp
+    Source/Common/SkirmishLauncher.cpp
+    Source/Common/ActionServer.cpp
+    Source/Common/ObservationServer.cpp
     Source/Common/INI/INI.cpp
     Source/Common/INI/INIAiData.cpp
     Source/Common/INI/INIAnimation.cpp

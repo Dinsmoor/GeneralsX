@@ -125,6 +125,20 @@ public:
 	// TheSuperHackers @feature helmutbuhler 11/04/2025
 	// Run game without graphics, input or audio.
 	Bool m_headless;
+	UnsignedShort m_observationPort;		///< TCP port for the observation server, 0 to disable
+	UnsignedInt m_observationInterval;	///< emit an observation every Nth logic frame
+	Bool m_observationUnitsOnly;			///< omit map scenery from observations
+	Int m_observationPlayer;				///< player index whose view to report, -1 for omniscient
+	Bool m_observationDebug;				///< append every player's economy to observations (diagnostics only)
+	Bool m_combatSandbox;						///< allow the action server's "spawn" verb. A bot must NEVER
+																	///< have this: conjuring units is not playing, and doing it
+																	///< mid-match would desync every other client. It exists so a
+																	///< harness can stage a controlled fight and measure the result.
+	UnsignedShort m_actionPort;			///< TCP port for the action server, 0 to disable
+	Int m_actionPlayer;					///< player index the action server issues orders as
+	AsciiString m_skirmishSlots;		///< comma separated slot spec, empty to disable -skirmish
+	AsciiString m_skirmishMap;		///< plain map name for -skirmish, expanded by the launcher
+	UnsignedInt m_skirmishMaxFrames;	///< stop a headless skirmish after this many frames, 0 for no limit
 
 	// GeneralsX @feature BenderAI 21/04/2026 Opt-out toggle for the in-game update checker.
 	Bool m_checkForUpdates;
