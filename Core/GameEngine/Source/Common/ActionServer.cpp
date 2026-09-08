@@ -1416,6 +1416,17 @@ void ActionServer::executeLine( const char *line )
 			return;
 		}
 
+		// The dozer drops a construct order outright when the bank is short
+		// (DozerAIUpdate::construct -> BuildAssistant::canMakeUnit), and did so
+		// silently behind an "ok" from here: the agent logged "starting" for a
+		// building the engine had already discarded. Say so instead.
+		if (builder != nullptr &&
+				TheBuildAssistant->canMakeUnit(builder, tmpl) == CANMAKE_NO_MONEY)
+		{
+			reply("no", "no money");
+			return;
+		}
+
 		LegalBuildCode code = TheBuildAssistant->isLocationLegalToBuild(
 			&loc, tmpl, angle, options, builder, player);
 
