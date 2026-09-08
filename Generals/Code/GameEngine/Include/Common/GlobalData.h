@@ -119,6 +119,15 @@ public:
 	// TheSuperHackers @feature helmutbuhler 11/04/2025
 	// Run game without graphics, input or audio.
 	Bool m_headless;
+	UnsignedShort m_observationPort;		///< TCP port for the observation server, 0 to disable
+	UnsignedInt m_observationInterval;	///< emit an observation every Nth logic frame
+	Bool m_observationUnitsOnly;			///< omit map scenery from observations
+	Int m_observationPlayer;				///< player index whose view to report, -1 for omniscient
+	UnsignedShort m_actionPort;			///< TCP port for the action server, 0 to disable
+	Int m_actionPlayer;					///< player index the action server issues orders as
+	AsciiString m_skirmishSlots;		///< comma separated slot spec, empty to disable -skirmish
+	AsciiString m_skirmishMap;		///< plain map name for -skirmish, expanded by the launcher
+	UnsignedInt m_skirmishMaxFrames;	///< stop a headless skirmish after this many frames, 0 for no limit
 
 	Bool m_windowed;
 	Int m_xResolution;

@@ -431,6 +431,11 @@ public:
 	Real getInfantryInaccuracyDist() const { return m_infantryInaccuracyDist; }
 	Real getAimDelta() const { return m_aimDelta; }
 	Real getScatterRadius() const { return m_scatterRadius; }
+	// Non-random reads of the shot delay range. getDelayBetweenShots() draws
+	// from the logic RNG, so anything that merely wants to DESCRIBE a weapon
+	// (the observation server) must use these or it desyncs the simulation.
+	Int getMinDelayBetweenShots() const { return m_minDelayBetweenShots; }
+	Int getMaxDelayBetweenShots() const { return m_maxDelayBetweenShots; }
 	Real getScatterTargetScalar() const { return m_scatterTargetScalar; }
 	const ThingTemplate* getProjectileTemplate() const { return m_projectileTmpl; }
 	Bool getDamageDealtAtSelfPosition() const { return m_damageDealtAtSelfPosition; }

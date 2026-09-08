@@ -109,6 +109,11 @@ public:
 	virtual Bool isTrueHordeMember() const = 0;
 	virtual Bool isAllowedNationalism() const = 0;
 	virtual HordeActionType getHordeActionType() const = 0;
+	// What the bonus requires, so an observer can report it without
+	// reaching into protected module data.
+	virtual Int getHordeMinCount() const = 0;
+	virtual Real getHordeMinDist() const = 0;
+	virtual Bool getHordeExactMatch() const = 0;
 };
 
 //-------------------------------------------------------------------------------------------------
@@ -132,6 +137,9 @@ public:
 	virtual Bool isTrueHordeMember() const override { return m_trueHordeMember && m_inHorde; }
 	virtual Bool isAllowedNationalism() const override;
 	virtual HordeActionType getHordeActionType() const override { return getHordeUpdateModuleData()->m_action; };
+	virtual Int getHordeMinCount() const override { return getHordeUpdateModuleData()->m_minCount; }
+	virtual Real getHordeMinDist() const override { return getHordeUpdateModuleData()->m_minDist; }
+	virtual Bool getHordeExactMatch() const override { return getHordeUpdateModuleData()->m_exactMatch; }
 
 protected:
 

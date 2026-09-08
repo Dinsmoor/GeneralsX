@@ -898,6 +898,115 @@ Int parseIncrAGPBuf(char *args[], int num)
 	return 1;
 }
 
+Int parseObservationPort(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_observationPort = (UnsignedShort)atoi(args[1]);
+		return 2;
+	}
+	return 1;
+}
+
+Int parseObservationPlayer(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_observationPlayer = atoi(args[1]);
+		return 2;
+	}
+	return 1;
+}
+
+Int parseActionPort(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_actionPort = (UnsignedShort)atoi(args[1]);
+		return 2;
+	}
+	return 1;
+}
+
+Int parseActionPlayer(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_actionPlayer = atoi(args[1]);
+		return 2;
+	}
+	return 1;
+}
+
+Int parseSkirmishMap(char *args[], int num)
+{
+	if (num > 1)
+	{
+		// Taken as a plain map name ("Alpine Assault"); the launcher expands it
+		// into the full maps/<name>/<name>.map path the map cache uses. This is
+		// separate from -map, whose parser mangles names containing spaces.
+		TheWritableGlobalData->m_skirmishMap.set(args[1]);
+		return 2;
+	}
+	return 1;
+}
+
+Int parseSkirmish(char *args[], int num)
+{
+	if (num > 1)
+	{
+		// A comma separated slot list, e.g. "human,hard" or "human,easy,easy".
+		TheWritableGlobalData->m_skirmishSlots.set(args[1]);
+		return 2;
+	}
+	// With no argument, a sensible default: the agent against one medium AI.
+	TheWritableGlobalData->m_skirmishSlots.set("human,medium");
+	return 1;
+}
+
+Int parseSkirmishMaxFrames(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_skirmishMaxFrames = (UnsignedInt)atoi(args[1]);
+		return 2;
+	}
+	return 1;
+}
+
+Int parseObservationDebug(char *args[], int num)
+{
+	TheWritableGlobalData->m_observationDebug = TRUE;
+	return 1;
+}
+
+Int parseCombatSandbox(char *args[], int num)
+{
+	// Unlocks the action server's "spawn" verb, for a harness that stages a
+	// controlled fight and measures who is left. Never pass this to a real
+	// match: spawning units mid-game desyncs every other client, and a bot
+	// that can conjure an army is not playing the game.
+	TheWritableGlobalData->m_combatSandbox = TRUE;
+	return 1;
+}
+
+Int parseObservationUnitsOnly(char *args[], int num)
+{
+	TheWritableGlobalData->m_observationUnitsOnly = TRUE;
+	return 1;
+}
+
+Int parseObservationInterval(char *args[], int num)
+{
+	if (num > 1)
+	{
+		Int interval = atoi(args[1]);
+		TheWritableGlobalData->m_observationInterval = interval > 0 ? interval : 1;
+		return 2;
+	}
+	return 1;
+}
+
 Int parseNetMinPlayers(char *args[], int num)
 {
 	if (num > 1)
@@ -1143,6 +1252,17 @@ static CommandLineParam paramsForStartup[] =
 	// TheSuperHackers @feature helmutbuhler 11/04/2025
 	// This runs the game without a window, graphics, input and audio. You can combine this with -replay
 	{ "-headless", parseHeadless },
+	{ "-obsport", parseObservationPort },
+	{ "-obsinterval", parseObservationInterval },
+	{ "-obsunitsonly", parseObservationUnitsOnly },
+	{ "-obsdebug", parseObservationDebug },
+	{ "-sandbox", parseCombatSandbox },
+	{ "-obsplayer", parseObservationPlayer },
+	{ "-actport", parseActionPort },
+	{ "-actplayer", parseActionPlayer },
+	{ "-skirmish", parseSkirmish },
+	{ "-skirmishmap", parseSkirmishMap },
+	{ "-skirmishframes", parseSkirmishMaxFrames },
 
 	// TheSuperHackers @feature helmutbuhler 13/04/2025
 	// Play back a replay. Pass the filename including .rep afterwards.

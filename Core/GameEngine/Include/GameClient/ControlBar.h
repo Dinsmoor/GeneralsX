@@ -656,6 +656,17 @@ public:
 	virtual ~ControlBar() override;
 
 	virtual void init() override;					///< from subsystem interface
+
+	/**
+		Load only the command button and command set tables.
+
+		A headless run has no window manager, image system or control bar
+		scheme, but BuildAssistant::isPossibleToMakeUnit() still consults the
+		command sets to decide whether a builder is allowed to make something.
+		Without them every construction order is silently refused. This loads
+		exactly that data and touches nothing graphical.
+	*/
+	void initCommandDataOnly();
 	virtual void reset() override;					///< from subsystem interface
 	virtual void update() override;				///< from subsystem interface
 

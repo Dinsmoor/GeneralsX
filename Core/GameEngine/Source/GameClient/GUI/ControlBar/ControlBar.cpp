@@ -1060,6 +1060,20 @@ void ControlBarPopupDescriptionUpdateFunc( WindowLayout *layout, void *param );
 //-------------------------------------------------------------------------------------------------
 /** Initialize the control bar, this is our interface to the context sensitive GUI */
 //-------------------------------------------------------------------------------------------------
+void ControlBar::initCommandDataOnly()
+{
+	INI ini;
+	m_sideSelectAnimateDown = FALSE;
+
+	ini.loadFileDirectory( "Data\\INI\\Default\\CommandButton", INI_LOAD_OVERWRITE, nullptr );
+	ini.loadFileDirectory( "Data\\INI\\CommandButton", INI_LOAD_OVERWRITE, nullptr );
+	ini.loadFileDirectory( "Data\\INI\\CommandSet", INI_LOAD_OVERWRITE, nullptr );
+
+	// Deliberately no postProcessCommands(): it caches button images, which
+	// needs an image system a headless run does not have. The command sets are
+	// fully usable without it.
+}
+
 void ControlBar::init()
 {
 	INI ini;

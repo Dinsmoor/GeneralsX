@@ -29,6 +29,7 @@
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/FramePacer.h"
+#include "Common/SkirmishLauncher.h"
 #include "Common/GameEngine.h"
 #include "Common/ReplaySimulation.h"
 
@@ -45,7 +46,13 @@ Int GameMain()
 	TheGameEngine = CreateGameEngine();
 	TheGameEngine->init();
 
-	if (!TheGlobalData->m_simulateReplays.empty())
+	if (!TheGlobalData->m_skirmishSlots.isEmpty())
+	{
+		// Headless skirmish: start a match from the command line so an agent can
+		// play without the shell UI.
+		exitcode = SkirmishLauncher::runSkirmish();
+	}
+	else if (!TheGlobalData->m_simulateReplays.empty())
 	{
 		exitcode = ReplaySimulation::simulateReplays(TheGlobalData->m_simulateReplays, TheGlobalData->m_simulateReplayJobs);
 	}

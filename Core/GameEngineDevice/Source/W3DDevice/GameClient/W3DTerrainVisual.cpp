@@ -553,15 +553,20 @@ Bool W3DTerrainVisual::load( AsciiString filename )
 
 	}
 
-	if( m_terrainRenderObject == nullptr )
-		return FALSE;
-
-
   ChunkInputStream *pStrm = &fileStrm;
 
   // allocate new height map data to read from file
+  // TheSuperHackers @logic-client-separation The logical height map is what
+  // getHeightMapHeight() actually samples, and reading it needs no renderer.
+  // Load it before bailing out on a missing render object, otherwise a
+  // headless run has no terrain heights at all: getGroundHeight() returns a
+  // flat zero, every pathfind cell classifies as water, and the pathfinder
+  // reports the whole map impassable.
   REF_PTR_RELEASE( m_logicHeightMap );
 	m_logicHeightMap = NEW WorldHeightMap(pStrm);
+
+	if( m_terrainRenderObject == nullptr )
+		return FALSE;
 
 #ifdef DO_SEISMIC_SIMULATIONS
 
