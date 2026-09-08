@@ -43,6 +43,11 @@
 #include "GameNetwork/GameSpy/PeerDefs.h"
 #include "GameNetwork/networkutil.h"
 #include "GameLogic/GameLogic.h"
+#include "GameLogic/Object.h"
+#include "GameClient/Drawable.h"
+#include <vector>
+#include <algorithm>
+#include <map>
 #include "Common/RandomValue.h"
 #include "Common/CRCDebug.h"
 #include "Common/OptionPreferences.h"
@@ -411,7 +416,216 @@ void RecorderClass::update() {
 /**
  * Do the update for the next frame of this playback.
  */
+
+// ---------------------------------------------------------------------------
+// BOT_STATES (diagnostic): draw each unit's bot state over it during playback.
+//
+// The observation server does not run during replay playback and the bot is
+// not in the loop, so the state a unit was in cannot be recomputed while
+// watching -- it has to be carried. The bot writes states.jsonl during the
+// match (frame, object id, job, distance-to-goal); pointing BOT_STATES at that
+// file draws the job above each unit as the replay plays.
+//
+// This exists because behaviour is what a replay shows and mechanism is what a
+// log shows, and matching them up by hand is where the time goes: a unit
+// visibly running in circles is one line in this overlay ("intr:5,5" flipping
+// to "resp:9,11" and back) and was otherwise several sessions of guesswork.
+//
+// Diagnostic only, off unless BOT_STATES is set, and playback-only so it can
+// never affect a recorded game.
+// ---------------------------------------------------------------------------
+namespace
+{
+
+	struct BotStateLabel
+	{
+		UnsignedInt   frame;
+		Int           objectID;
+		AsciiString   text;
+	};
+
+	class BotStateOverlay
+	{
+	public:
+		BotStateOverlay() : m_loaded(false), m_cursor(0), m_lastFrame(0) {}
+
+		void draw(UnsignedInt frame)
+		{
+			if (!m_loaded)
+				load();
+			if (m_labels.empty())
+				return;
+
+			// Scrubbing backwards (or a new playback) means starting over:
+			// the cursor is a forward-only walk through a sorted list.
+			if (frame < m_lastFrame)
+			{
+				m_cursor = 0;
+				m_shown.clear();
+			}
+			m_lastFrame = frame;
+
+			while (m_cursor < m_labels.size() && m_labels[m_cursor].frame < frame)
+				++m_cursor;
+
+			for (size_t i = m_cursor; i < m_labels.size(); ++i)
+			{
+				if (m_labels[i].frame != frame)
+					break;
+				Object *obj = TheGameLogic->findObjectByID((ObjectID)m_labels[i].objectID);
+				if (obj == nullptr)
+					continue;
+				Drawable *draw = obj->getDrawable();
+				if (draw == nullptr)
+					continue;
+
+				// A CAPTION on the drawable, not floating text.
+				//
+				// addFloatingText is built for damage numbers: each call
+				// allocates one more, drifts it upward and fades it out. Used
+				// for a state label it produced an ascending smear of
+				// thousands of allocations a second and nothing readable. A
+				// caption is persistent, anchored to the unit, and replaced
+				// rather than stacked -- which is what "what is this unit
+				// doing" actually needs.
+				//
+				// Only when the text CHANGES, so the caption is not rebuilt
+				// every sample; and a change is the interesting event anyway.
+				std::map<Int, AsciiString>::iterator prev =
+					m_shown.find(m_labels[i].objectID);
+				if (prev != m_shown.end() && prev->second == m_labels[i].text)
+					continue;
+				m_shown[m_labels[i].objectID] = m_labels[i].text;
+
+				UnicodeString wide;
+				wide.translate(m_labels[i].text);
+				draw->setCaptionText(wide);
+			}
+		}
+
+	private:
+		void load()
+		{
+			m_loaded = true;
+			const char *path = getenv("BOT_STATES");
+			if (path == nullptr || *path == 0)
+				return;
+			FILE *fp = fopen(path, "r");
+			if (fp == nullptr)
+			{
+				DEBUG_LOG(("BOT_STATES: cannot open %s\n", path));
+				return;
+			}
+			char line[1024];
+			while (fgets(line, sizeof(line), fp) != nullptr)
+			{
+				BotStateLabel lab;
+				if (parse(line, lab))
+					m_labels.push_back(lab);
+			}
+			fclose(fp);
+			// The bot writes in frame order, but a sort makes the forward
+			// walk above safe whatever produced the file.
+			std::stable_sort(m_labels.begin(), m_labels.end(), byFrame);
+			DEBUG_LOG(("BOT_STATES: %d labels from %s\n",
+				(Int)m_labels.size(), path));
+		}
+
+		static Bool byFrame(const BotStateLabel &a, const BotStateLabel &b)
+		{
+			return a.frame < b.frame;
+		}
+
+		/// One JSON row -> a label. Reads only the fields it needs, by name,
+		/// so extra fields in states.jsonl cost nothing here.
+		static Bool parse(const char *line, BotStateLabel &out)
+		{
+			Int frame = 0, id = 0;
+			if (!readInt(line, "\"f\":", frame))  return FALSE;
+			if (!readInt(line, "\"id\":", id))    return FALSE;
+
+			// The label is built by the bot, in `lab`, so it can be made
+			// more descriptive without a ten-minute engine rebuild. Falling
+			// back to `job` keeps an older states.jsonl readable.
+			char text[96];
+			if (!readStr(line, "\"lab\":", text, sizeof(text)) || text[0] == 0)
+			{
+				if (!readStr(line, "\"job\":", text, sizeof(text)) || text[0] == 0)
+					return FALSE;
+			}
+
+			out.frame    = (UnsignedInt)frame;
+			out.objectID = id;
+			out.text.set(text);
+			return TRUE;
+		}
+
+		/// Step past the key and any spaces after the colon.
+		///
+		/// json.dumps writes `"f": 3150`, WITH a space. Reading the byte
+		/// straight after the colon therefore found a space, not a digit,
+		/// and matching on `"job":"` never matched at all -- the whole file
+		/// parsed to zero labels and the overlay drew nothing, silently.
+		static const char *afterKey(const char *line, const char *key)
+		{
+			const char *p = strstr(line, key);
+			if (p == nullptr)
+				return nullptr;
+			p += strlen(key);
+			while (*p == ' ' || *p == '\t')
+				++p;
+			return p;
+		}
+
+		static Bool readInt(const char *line, const char *key, Int &value)
+		{
+			const char *p = afterKey(line, key);
+			if (p == nullptr)
+				return FALSE;
+			if (*p == 'n')            // null, as `goal` is when there is no target
+				return FALSE;
+			value = atoi(p);
+			return TRUE;
+		}
+
+		static Bool readStr(const char *line, const char *key, char *buf, size_t cap)
+		{
+			const char *p = afterKey(line, key);
+			if (p == nullptr)
+				return FALSE;
+			if (*p == '"')            // skip the opening quote of the value
+				++p;
+			size_t n = 0;
+			while (*p && *p != '"' && n + 1 < cap)
+				buf[n++] = *p++;
+			buf[n] = 0;
+			return TRUE;
+		}
+
+		Bool                        m_loaded;
+		std::vector<BotStateLabel>  m_labels;
+		//: What each unit's caption currently says, so it is set on change
+		//: rather than every sample.
+		std::map<Int, AsciiString>  m_shown;
+		size_t                      m_cursor;
+		UnsignedInt                 m_lastFrame;
+	};
+
+	static BotStateOverlay theBotStateOverlay;
+
+}  // anonymous namespace
+
 void RecorderClass::updatePlayback() {
+	// Diagnostic overlay: the bot's per-unit state drawn over each unit.
+	// Off unless BOT_STATES names a states.jsonl; playback only.
+	//
+	// FIRST, before any early return. Both the returns below are normal on a
+	// quiet frame -- `m_nextFrame == -1` simply means no more commands are
+	// queued, which is most frames in a replay -- so drawing after them meant
+	// the labels appeared only on frames where the bot happened to issue an
+	// order, i.e. essentially never.
+	theBotStateOverlay.draw(TheGameLogic->getFrame());
+
 	// Remove any bad commands that have been inserted by the local user that shouldn't be
 	// executed during playback.
 	CullBadCommandsResult result = cullBadCommands();
