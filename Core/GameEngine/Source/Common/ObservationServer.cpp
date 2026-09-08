@@ -520,6 +520,55 @@ void ObservationServer::buildMapDescription()
 		body += "]";
 	}
 
+	// The map's authored waypoint paths. The skirmish AI attacks along paths
+	// labelled Center<N>, Flank<N> and Backdoor<N> into player N's base
+	// (ScriptActions::doTeamFollowSkirmishApproachPath); a human sees the
+	// same terrain and picks the same routes, so an agent may read them. Only
+	// waypoints on a labelled path are sent, with their outgoing links, so the
+	// agent can walk a path from either end.
+	body += ",\"paths\":[";
+	if (TheTerrainLogic != nullptr)
+	{
+		Bool firstPath = TRUE;
+		for (Waypoint *wp = TheTerrainLogic->getFirstWaypoint(); wp != nullptr; wp = wp->getNext())
+		{
+			const AsciiString &l1 = wp->getPathLabel1();
+			const AsciiString &l2 = wp->getPathLabel2();
+			const AsciiString &l3 = wp->getPathLabel3();
+			if (l1.isEmpty() && l2.isEmpty() && l3.isEmpty())
+				continue;
+			if (!firstPath)
+				body += ",";
+			firstPath = FALSE;
+			snprintf(chunk, sizeof(chunk), "{\"name\":\"%.48s\",\"x\":%.1f,\"y\":%.1f,\"labels\":[",
+				wp->getName().str(), wp->getLocation()->x, wp->getLocation()->y);
+			body += chunk;
+			Bool firstLabel = TRUE;
+			const AsciiString *labels[3] = { &l1, &l2, &l3 };
+			for (Int li = 0; li < 3; ++li)
+			{
+				if (labels[li]->isEmpty())
+					continue;
+				if (!firstLabel)
+					body += ",";
+				firstLabel = FALSE;
+				snprintf(chunk, sizeof(chunk), "\"%.48s\"", labels[li]->str());
+				body += chunk;
+			}
+			body += "],\"links\":[";
+			for (Int ln = 0; ln < wp->getNumLinks(); ++ln)
+			{
+				Waypoint *to = wp->getLink(ln);
+				if (to == nullptr)
+					continue;
+				snprintf(chunk, sizeof(chunk), "%s\"%.48s\"", ln ? "," : "", to->getName().str());
+				body += chunk;
+			}
+			body += "]}";
+		}
+	}
+	body += "]";
+
 	// Everything the observing player may build, with the numbers shown on the
 	// build palette. Static for the match, so it travels with the map. Costs
 	// come from the templates, so a mod's own units and prices come through.
