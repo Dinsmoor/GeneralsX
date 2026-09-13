@@ -97,15 +97,40 @@ EnumeratedIP * IPEnumeration::getAddresses()
 		return nullptr;
 	}
 
+	/*	TheSuperHackers @feature Offer 127.0.0.1 so a game can be hosted
+		for another process on this same machine.
+
+		gethostbyname never returns loopback, so the interface list in
+		Options only ever showed real NICs. That matters more than it
+		looks: the LAN socket is bound to the chosen address's DEVICE, so
+		a host on enp3s0 cannot receive from any other local address --
+		the kernel routes between two local addresses over `lo`, and the
+		packet never reaches the enp3s0 socket. Loopback on BOTH sides is
+		the only combination that works within one machine, which is what
+		playing against a local headless client needs.
+
+		Harmless otherwise: a host on 127.0.0.1 is simply not reachable
+		from other machines, which is exactly what someone picking it is
+		asking for. (addNewIP keeps the list sorted by address, so it
+		lands among the others rather than at the top.)
+	*/
+	addNewIP(127, 0, 0, 1);
+
 	// TheSuperHackers @feature Add one unique local host IP address for each multi client instance.
 	if (rts::ClientInstance::isMultiInstance())
 	{
 		const UnsignedInt id = rts::ClientInstance::getInstanceId();
-		addNewIP(
-			127,
-			(UnsignedByte)(id >> 16),
-			(UnsignedByte)(id >> 8),
-			(UnsignedByte)(id));
+		// addNewIP does not de-duplicate, and instance id 1 is 127.0.0.1,
+		// which we just added unconditionally -- skip it so the interface
+		// list cannot show the same address twice.
+		if (id != 1)
+		{
+			addNewIP(
+				127,
+				(UnsignedByte)(id >> 16),
+				(UnsignedByte)(id >> 8),
+				(UnsignedByte)(id));
+		}
 	}
 
 	// construct a list of addresses

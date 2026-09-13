@@ -34,12 +34,14 @@
 #include "Common/GlobalData.h"
 #include "Common/RandomValue.h"
 #include "GameClient/GameText.h"
+#include "GameClient/Shell.h"
 #include "GameClient/MapUtil.h"
 #include "Common/UserPreferences.h"
 #include "GameLogic/GameLogic.h"
 
 
 static const UnsignedShort lobbyPort = 8086; ///< This is the UDP port used by all LANAPI communication
+
 
 AsciiString GetMessageTypeString(UnsignedInt type);
 
@@ -200,7 +202,43 @@ void LANAPI::sendMessage(LANMessage *msg, UnsignedInt ip /* = 0 */)
 	}
 	else
 	{
+		/*	TheSuperHackers @fix Broadcast AND unicast to known members.
+
+			"Send to everyone" is a broadcast, which is right for lobby
+			discovery -- we do not yet know who is out there. But once we
+			are IN a game we know every member's address, and a broadcast
+			is then the least reliable way to reach them: it never crosses
+			a routed or segmented LAN, does not reach a peer on another
+			local address (a second engine on one machine), and is dropped
+			by some VPN and virtual adapters.
+
+			The failure this causes is silent and confusing -- lobby chat
+			and slot-list updates simply never arrive for that player,
+			while the host shows them sitting happily in the lobby. So
+			keep the broadcast for anyone we have not enumerated, and
+			additionally send straight to each member we know about.
+
+			Duplicates are harmless: every handler here is idempotent (a
+			repeated slot list parses to the same thing, and the sender
+			ignores its own packets via the senderIP == m_localIP test).
+		*/
 		m_transport->queueSend(m_broadcastAddr, lobbyPort, (unsigned char *)msg, sizeof(LANMessage) /*, 0, 0 */);
+
+		if (m_currentGame != nullptr)
+		{
+			const Int localSlot = m_currentGame->getLocalSlotNum();
+			for (Int i = 0; i < MAX_SLOTS; ++i)
+			{
+				if (i == localSlot)
+					continue;
+				const GameSlot *slot = m_currentGame->getSlot(i);
+				if (slot == nullptr || !slot->isHuman())
+					continue;
+				const UnsignedInt ipTo = m_currentGame->getIP(i);
+				if (ipTo != 0 && ipTo != m_localIP)
+					m_transport->queueSend(ipTo, lobbyPort, (unsigned char *)msg, sizeof(LANMessage) /*, 0, 0 */);
+			}
+		}
 	}
 }
 
@@ -340,8 +378,17 @@ void LANAPI::update()
 		}
 	}
 
-	// Handle any new messages
-	for (size_t i = 0; i < ARRAY_SIZE(m_transport->m_inBuffer) && !LANbuttonPushed; ++i)
+	// Handle any new messages.
+	//
+	// TheSuperHackers @fix LANbuttonPushed exists so the menu can freeze LAN
+	// processing while a screen transition finishes (LanLobbyMenu.cpp sets
+	// it on every successful callback and the next screen's init clears it).
+	// With no shell there is no next screen, so once a callback set it the
+	// loop below stopped running forever: a host went deaf the moment it
+	// created its game, and a joiner the moment it was accepted. Only honour
+	// it when there is actually a shell to wait for.
+	const Bool freezeForMenu = (TheShell != nullptr) && LANbuttonPushed;
+	for (size_t i = 0; i < ARRAY_SIZE(m_transport->m_inBuffer) && !freezeForMenu; ++i)
 	{
 		if (m_transport->m_inBuffer[i].length > 0)
 		{
@@ -354,6 +401,13 @@ void LANAPI::update()
 			}
 
 			LANMessage *msg = (LANMessage *)(m_transport->m_inBuffer[i].data);
+			if (TheShell == nullptr)
+			{
+				printf("JOINTRACE: recv type=%d from %d.%d.%d.%d (pending=%d inLobby=%d)\n",
+					(int)msg->messageType, PRINTF_IP_AS_4_INTS(senderIP),
+					(int)m_pendingAction, (int)m_inLobby);
+				fflush(stdout);
+			}
 			//DEBUG_LOG(("LAN message type %s from %ls (%s@%s)", GetMessageTypeString(msg->messageType).str(),
 			//	msg->name, msg->userName, msg->hostName));
 			switch (msg->messageType)
@@ -436,7 +490,17 @@ void LANAPI::update()
 			break;
 		}
 	}
-	if(LANbuttonPushed)
+	/*	TheSuperHackers @fix Same reasoning as freezeForMenu above.
+
+		LANbuttonPushed exists so a menu can freeze LAN processing while a
+		screen transition finishes; the next screen's init clears it. With
+		no shell there is no next screen, so once a callback set it this
+		return fired forever and the client stopped sending its periodic
+		"HELLO" keepalive. The HOST then sees lastHeard go stale and drops
+		us after s_resendDelta*8 (80s) with "player was not responding" --
+		having accepted the join perfectly well moments earlier.
+	*/
+	if (TheShell != nullptr && LANbuttonPushed)
 		return;
 	// Send out periodic I'm Here messages
 	if (now > s_resendDelta + m_lastResendTime)
@@ -743,10 +807,21 @@ void LANAPI::RequestHasMap()
 	if (m_inLobby || !m_currentGame)
 		return;
 
+	// TheSuperHackers @fix getLocalSlotNum() is -1 until we have a slot,
+	// and getSlot(-1) was then dereferenced. The lobby menu only ever
+	// called this with a slot in hand; a headless client can reach it a
+	// frame earlier, before the host has seated it.
+	const Int localSlot = m_currentGame->getLocalSlotNum();
+	if (localSlot < 0)
+		return;
+	const GameSlot *localSlotPtr = m_currentGame->getSlot(localSlot);
+	if (localSlotPtr == nullptr)
+		return;
+
 	LANMessage msg;
 	fillInLANMessage( &msg );
 	msg.messageType = LANMessage::MSG_MAP_AVAILABILITY;
-	msg.MapStatus.hasMap = m_currentGame->getSlot(m_currentGame->getLocalSlotNum())->hasMap();
+	msg.MapStatus.hasMap = localSlotPtr->hasMap();
 	wcslcpy(msg.MapStatus.gameName, m_currentGame->getName().str(), ARRAY_SIZE(msg.MapStatus.gameName));
 	CRC mapNameCRC;
 //mapNameCRC.computeCRC(m_currentGame->getMap().str(), m_currentGame->getMap().getLength());

@@ -648,6 +648,16 @@ GlobalData::GlobalData()
 	m_skirmishSlots.clear();
 	m_skirmishMap.clear();
 	m_skirmishMaxFrames = 0;
+	m_botJoinEnabled = FALSE;
+	m_botJoinHost.clear();
+	m_botJoinName = "Bot";
+	m_botHostEnabled = FALSE;
+	m_botHostMap.clear();
+	m_botHostPlayers = 2;
+	m_botHostLanLobby = FALSE;
+	m_lobbyScript.clear();
+	m_netLocalIP.clear();
+	m_botFaction.clear();
 	m_windowed = 0;
 	m_xResolution = DEFAULT_DISPLAY_WIDTH;
 	m_yResolution = DEFAULT_DISPLAY_HEIGHT;

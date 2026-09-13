@@ -418,12 +418,44 @@ void LANAPI::handleRequestJoin( LANMessage *msg, UnsignedInt senderIP )
 		reply.GameNotJoined.gameIP = m_localIP;
 		reply.GameNotJoined.playerIP = senderIP;
 	}
+	/*	TheSuperHackers @fix Always answer the joiner DIRECTLY as well.
+
+		On the accept path responseIP is deliberately 0, which makes
+		sendMessage broadcast so every client in the game learns the new
+		slot list. But that leaves the one machine that actually asked --
+		the joiner -- relying on a broadcast reaching it, and a broadcast
+		is the least reliable way to reach a host that just contacted us
+		by unicast. It fails outright when the joiner is on an address
+		that does not receive this broadcast domain (a second engine on
+		one machine, a routed or segmented LAN, some VPN setups). The
+		symptom is nasty and silent: the host seats the player and shows
+		them in the lobby, the joiner never hears JOIN_ACCEPT, stays in
+		ACT_JOIN, never starts sending its HELLO keepalive, and is dropped
+		~80 seconds later as "not responding".
+
+		So keep the broadcast for everyone else, and additionally unicast
+		the reply to the sender. A duplicate is harmless: handleJoinAccept
+		is guarded by `m_pendingAction == ACT_JOIN` and clears it, so the
+		second copy is ignored.
+	*/
 	sendMessage(&reply, responseIP);
+	if (responseIP == 0 && senderIP != 0 && senderIP != m_localIP)
+		sendMessage(&reply, senderIP);
+
 	RequestGameOptions(GenerateGameOptionsString(), true);
 }
 
 void LANAPI::handleJoinAccept( LANMessage *msg, UnsignedInt senderIP )
 {
+	if (TheShell == nullptr)
+	{
+		AsciiString gn; gn.translate(UnicodeString(msg->GameJoined.gameName));
+		printf("JOINTRACE: JOIN_ACCEPT for %d.%d.%d.%d (mine %d.%d.%d.%d) pending=%d game='%s' lookup=%p\n",
+			PRINTF_IP_AS_4_INTS(msg->GameJoined.playerIP),
+			PRINTF_IP_AS_4_INTS(m_localIP), (int)m_pendingAction, gn.str(),
+			(void*)LookupGame(UnicodeString(msg->GameJoined.gameName)));
+		fflush(stdout);
+	}
 	if (msg->GameJoined.playerIP == m_localIP) // Is it for us?
 	{
 		if (m_pendingAction == ACT_JOIN) // Are we trying to join?

@@ -143,6 +143,7 @@ SpecialPowerModule::SpecialPowerModule( Thing *thing, const ModuleData *moduleDa
 			getObject()->getControllingPlayer() &&
 			getObject()->isKindOf( KINDOF_STRUCTURE ) )
 	{
+		if( TheInGameUI )
 		TheInGameUI->addSuperweapon( getObject()->getControllingPlayer()->getPlayerIndex(),
 																 getPowerName(),
 																 getObject()->getID(),
@@ -165,6 +166,7 @@ SpecialPowerModule::~SpecialPowerModule()
 
  	if( getSpecialPowerModuleData()->m_specialPowerTemplate->hasPublicTimer() == TRUE &&
 			getObject()->getControllingPlayer() )
+ 		if( TheInGameUI )
  		TheInGameUI->removeSuperweapon( getObject()->getControllingPlayer()->getPlayerIndex(),
 																		getPowerName(),
 																		getObject()->getID(),
@@ -196,6 +198,7 @@ void SpecialPowerModule::resolveSpecialPower()
 	{
 		//KM: The KINDOF_STRUCTURE check was made to prevent scripted bombers from registering their
 		//    special powers as public timers.
+		if( TheInGameUI )
 		TheInGameUI->addSuperweapon( getObject()->getControllingPlayer()->getPlayerIndex(),
 																 getPowerName(),
 																 getObject()->getID(),
@@ -232,10 +235,18 @@ void SpecialPowerModule::onSpecialPowerCreation()
 		pauseCountdown( TRUE );
 
 	// add this weapon to the UI if it has a public timer for all to see
+	//
+	// TheSuperHackers @fix TheInGameUI is NULL in a headless build --
+	// createInGameUI() yields nothing without a display device. This is
+	// GameLogic code and runs headless too, so the unguarded virtual call
+	// here killed the engine the instant a superweapon was purchased or
+	// fired. Every TheInGameUI-> call in this file is guarded for that
+	// reason; the UI is a display of logic state, never a part of it.
 	if( getSpecialPowerModuleData()->m_specialPowerTemplate->hasPublicTimer() == TRUE &&
 			getObject()->getControllingPlayer() &&
 			getObject()->isKindOf( KINDOF_STRUCTURE ) )
 	{
+		if( TheInGameUI )
 		TheInGameUI->addSuperweapon( getObject()->getControllingPlayer()->getPlayerIndex(),
 																 getPowerName(),
 																 getObject()->getID(),
@@ -527,11 +538,23 @@ void SpecialPowerModule::createViewObject( const Coord3D *location )
 	if( objectName.isEmpty() )
 		return;
 
+	// TheSuperHackers @fix Every link in this chain was dereferenced blind.
+	// A special power fired from a headless build crashed here: the view
+	// object exists only so a HUMAN can watch the strike, and nothing on
+	// the logic side needs it, so any missing piece must simply skip it
+	// rather than fault.
+	if( TheThingFactory == nullptr )
+		return;
+
 	const ThingTemplate *viewObjectTemplate = TheThingFactory->findTemplate( objectName );
 	if( viewObjectTemplate == nullptr )
 		return;
 
-	Object *viewObject = TheThingFactory->newObject( viewObjectTemplate, getObject()->getControllingPlayer()->getDefaultTeam() );
+	Player *owner = getObject()->getControllingPlayer();
+	if( owner == nullptr || owner->getDefaultTeam() == nullptr )
+		return;
+
+	Object *viewObject = TheThingFactory->newObject( viewObjectTemplate, owner->getDefaultTeam() );
 
 	if( viewObject == nullptr )
 		return;
@@ -568,7 +591,19 @@ void SpecialPowerModule::aboutToDoSpecialPower( const Coord3D *location )
 	// Let EVA do her thing
 	SpecialPowerType type = getSpecialPowerModuleData()->m_specialPowerTemplate->getSpecialPowerType();
 
-	Player *localPlayer = rts::getObservedOrLocalPlayer();
+	// TheSuperHackers @fix This is GameLogic code, and everything below is
+	// EVA -- the announcer voice. Both of its dependencies are CLIENT
+	// singletons that do not exist in a headless build:
+	// rts::getObservedOrLocalPlayer() dereferences TheControlBar (null,
+	// and its DEBUG_ASSERTCRASH compiles away in release), and TheEva is
+	// only ever created by GameClient::init(). Firing any special power
+	// headless therefore made a virtual call through null and killed the
+	// engine -- which is why a bot could buy a superweapon but never use
+	// one. Use the _Safe accessor and skip the announcement when there is
+	// nobody to announce to.
+	Player *localPlayer = rts::getObservedOrLocalPlayer_Safe();
+	if( localPlayer != nullptr && TheEva != nullptr )
+	{
 	Relationship relationship = localPlayer->getRelationship(getObject()->getTeam());
 
   // Only play the EVA sounds if this is not the local player, and the local player doesn't consider the
@@ -659,6 +694,7 @@ void SpecialPowerModule::aboutToDoSpecialPower( const Coord3D *location )
         TheEva->setShouldPlay(EVA_SuperweaponLaunched_Enemy_Sneak_Attack);
       }
     }
+	}
 	}
 
 	// get module data
@@ -896,6 +932,7 @@ void SpecialPowerModule::loadPostProcess()
 			getObject()->getControllingPlayer() &&
 			getObject()->isKindOf( KINDOF_STRUCTURE ) )
 	{
+		if( TheInGameUI )
 		TheInGameUI->addSuperweapon( getObject()->getControllingPlayer()->getPlayerIndex(),
 																 getPowerName(),
 																 getObject()->getID(),

@@ -385,6 +385,15 @@ void StartPressed()
 
 void LANEnableStartButton(Bool enabled)
 {
+	// TheSuperHackers @fix These gadget pointers are only set by
+	// InitLanGameGadgets, which needs a shell. LANGameInfo::resetAccepted
+	// calls this whenever a player joins, so a headless host crashed on
+	// its first joiner -- inside handleRequestJoin, after the slot was
+	// filled but before JOIN_ACCEPT was sent. The joiner saw no reply and
+	// no deny, which looks exactly like the host never existed.
+	if (buttonStart == nullptr || buttonSelectMap == nullptr)
+		return;
+
 	buttonStart->winEnable(enabled);
 	buttonSelectMap->winEnable(enabled);
 }
@@ -657,6 +666,15 @@ static void handleLimitSuperweaponsClick()
 
 void lanUpdateSlotList()
 {
+	// TheSuperHackers @fix This repaints the lobby's slot widgets. In a
+	// headless build the gadget pointers are never initialised (no shell,
+	// so InitLanGameGadgets never runs), and UpdateSlotList dereferences
+	// them -- a host taking its first joiner died right here, inside
+	// handleRequestJoin's accept branch, before it could send JOIN_ACCEPT.
+	// From the joiner's side that is indistinguishable from the host
+	// vanishing: no deny, no reply, nothing.
+	if (TheShell == nullptr)
+		return;
 	if(!AreSlotListUpdatesEnabled() || s_isIniting)
 		return;
 	UpdateSlotList( TheLAN->GetMyGame(), comboBoxPlayer, comboBoxColor,
