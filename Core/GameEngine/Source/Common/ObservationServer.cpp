@@ -28,6 +28,7 @@
 #include "GameLogic/Module/AIUpdate.h"
 #include "GameLogic/Module/DozerAIUpdate.h"
 #include "GameLogic/Module/HordeUpdate.h"
+#include "GameLogic/Module/AutoDepositUpdate.h"
 #include "GameLogic/Module/ActiveBody.h"
 #include "GameClient/MapUtil.h"
 #include "Common/ThingFactory.h"
@@ -1470,6 +1471,33 @@ void ObservationServer::buildObservation( std::string &out )
 			kindMask(tmpl), obj->getVisionRange(),
 			weapon ? weapon->getAttackRange(obj) : 0.0f, speed);
 		out += scratch.str();
+
+		// WHAT A NEUTRAL BUILDING IS WORTH, from the engine rather than
+		// from its name.
+		//
+		// KINDOF_TECH_BUILDING is one bit for the lot -- KindOf.h calls it
+		// "Neutral tech building - Oil derrick, Hospital, Radio Station,
+		// Refinery" -- so an agent told only "this is a tech building" has
+		// no way to tell income from healing, and the only alternative was
+		// matching on template names, which is a guess about what a map
+		// calls things. The engine knows: a building that pays runs an
+		// AutoDepositUpdate carrying the amount and the interval.
+		{
+			static const NameKeyType key_deposit = NAMEKEY("AutoDepositUpdate");
+			const UpdateModule *depositMod = obj->findUpdateModule(key_deposit);
+			if (depositMod != nullptr)
+			{
+				const AutoDepositUpdate *dep = (const AutoDepositUpdate *)depositMod;
+				if (dep->friend_getDepositAmount() != 0)
+				{
+					scratch.format(",\"income\":%d,\"income_every\":%u,\"capture_bonus\":%d",
+						dep->friend_getDepositAmount(),
+						dep->friend_getDepositFrames(),
+						dep->friend_getCaptureBonus());
+					out += scratch.str();
+				}
+			}
+		}
 
 		// China's horde bonus is a real damage multiplier for massing units
 		// together, so whether a unit currently HAS it is tactical state, not
