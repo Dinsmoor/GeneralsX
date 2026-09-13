@@ -37,6 +37,21 @@
 #include <vector>
 #include <winsock2.h>
 
+/*	Chat goes out through a helper in ConnectionManager.cpp.
+
+	Not by including NetworkInterface.h here: that reaches
+	ConnectionManager.h -> Transport.h -> udp.h, which includes
+	<winsock.h> -- winsock 1. This file already uses <winsock2.h> for its
+	own listening socket, and one translation unit cannot have both: VC6
+	reports every winsock function as "redefinition; different linkage"
+	and then resolves htons/bind/recvfrom as function POINTERS, failing
+	in socket code that has not changed in months.
+
+	So declare the one symbol we need and let the network side keep its
+	own headers.
+*/
+extern Bool BotSendChat( UnicodeString text, Int playerMask );
+
 ActionServer *TheActionServer = nullptr;
 
 // An order line longer than this is malformed; drop the client rather than
@@ -423,6 +438,32 @@ void ActionServer::receive()
 }
 
 //-------------------------------------------------------------------------------------------------
+/**
+ * The player these orders belong to.
+ *
+ * TheSuperHackers @fix -actplayer is fixed at init, before any game exists.
+ * That is fine for a skirmish, where the slot is known in advance, but in a
+ * NETWORK game the slot depends on join order, and a message stamped with
+ * the wrong player index is either rejected by the other peers or desyncs
+ * them. Passing -actplayer -1 means "whichever slot this machine actually
+ * controls", resolved from ThePlayerList once the game is running.
+ */
+Int ActionServer::playerIndex() const
+{
+	if (m_playerIndex >= 0)
+		return m_playerIndex;
+
+	if (ThePlayerList != nullptr)
+	{
+		const Player *local = ThePlayerList->getLocalPlayer();
+		if (local != nullptr)
+			return local->getPlayerIndex();
+	}
+
+	return -1;
+}
+
+//-------------------------------------------------------------------------------------------------
 GameMessage *ActionServer::beginMessage( GameMessage::Type type )
 {
 	// Only commands the network layer itself is willing to carry may be
@@ -436,7 +477,7 @@ GameMessage *ActionServer::beginMessage( GameMessage::Type type )
 
 	// The constructor attributes the message to the local player; an agent
 	// acts as its own player, which may not be the local one.
-	msg->friend_setPlayerIndex(m_playerIndex);
+	msg->friend_setPlayerIndex(playerIndex());
 
 	return msg;
 }
@@ -481,6 +522,98 @@ void ActionServer::executeLine( const char *line )
 	const char *verb = action.str();
 
 	// ---- selection -------------------------------------------------------
+
+	/*	Speak in the game's own chat.
+
+		Not routed through TheCommandList like the order verbs below.
+		Chat has its own ordered path -- Network::sendChat stamps an
+		execution frame and hands the message to the connection manager,
+		which relays it to every peer exactly like a game command. That
+		ordering is what makes it lockstep-safe; posting it as a local
+		message instead would deliver it on this machine only, which is
+		precisely the desync the action server's own polling site was
+		moved to avoid.
+
+		scope: "global" talks to everyone, "team" only to allies, and
+		"private" is a no-op that reaches nobody -- included so an agent
+		can think out loud into the log without leaking to opponents.
+
+		The mask is built the way InGameChat.cpp builds it: an ALLIES
+		line tests the relationship in BOTH directions and adds self,
+		because a one-way alliance is not a team and getting this wrong
+		leaks team talk to an opponent.
+	*/
+	if (strcmp(verb, "say") == 0)
+	{
+		AsciiString text;
+		if (!readString(line, "text", text) || text.isEmpty())
+		{
+			reply("error", "say needs a non-empty text");
+			return;
+		}
+
+		AsciiString scopeStr("global");
+		readString(line, "scope", scopeStr);
+
+		Player *local = (ThePlayerList != nullptr) ? ThePlayerList->getLocalPlayer() : nullptr;
+		if (local == nullptr)
+		{
+			reply("error", "no local player");
+			return;
+		}
+
+		/*	The mask is indexed by SLOT, not by player index.
+
+			InGameChat.cpp builds it as (1<<i) over slot numbers and
+			processChat tests it against m_localSlot. The two numbering
+			schemes are genuinely different -- PlayerList keeps an explicit
+			m_slotToPlayerIndices mapping -- so building this from
+			getPlayerIndex() would address the wrong people. On a team line
+			that means leaking to an opponent, which is worse than not
+			sending at all.
+		*/
+		Int playerMask = 0;
+		const Bool teamOnly = (strcmp(scopeStr.str(), "team") == 0);
+		const Bool privateOnly = (strcmp(scopeStr.str(), "private") == 0);
+		if (!privateOnly)
+		{
+			for (Int slot = 0; slot < MAX_SLOTS; ++slot)
+			{
+				Player *other = ThePlayerList->getPlayerFromSlotIndex(slot);
+				if (other == nullptr)
+					continue;
+				if (!teamOnly)
+				{
+					playerMask |= (1 << slot);
+				}
+				else if (other == local ||
+						(other->getRelationship(local->getDefaultTeam()) == ALLIES &&
+						 local->getRelationship(other->getDefaultTeam()) == ALLIES))
+				{
+					playerMask |= (1 << slot);
+				}
+			}
+		}
+
+		if (playerMask == 0)
+		{
+			reply("ok", "nobody to say it to");
+			return;
+		}
+
+		UnicodeString wide;
+		wide.translate(text);
+
+		// FALSE means there is no network game -- single player has no chat
+		// channel at all. Say so rather than pretending the line was sent.
+		if (!BotSendChat(wide, playerMask))
+		{
+			reply("error", "no network game; chat has nowhere to go");
+			return;
+		}
+		reply("ok", "say");
+		return;
+	}
 
 	if (strcmp(verb, "select") == 0)
 	{
@@ -721,8 +854,7 @@ void ActionServer::executeLine( const char *line )
 			strcmp(verb, "hack_internet") == 0 ||
 			strcmp(verb, "toggle_overcharge") == 0 ||
 			strcmp(verb, "cancel_construct") == 0 ||
-			strcmp(verb, "railed_transport") == 0 ||
-			strcmp(verb, "resume_construction") == 0)
+			strcmp(verb, "railed_transport") == 0)
 	{
 		if (!selectObjects(line))
 		{
@@ -759,6 +891,47 @@ void ActionServer::executeLine( const char *line )
 
 		TheCommandList->appendMessage(msg);
 		reply("ok", verb);
+		return;
+	}
+
+	// ---- resume an abandoned construction --------------------------------
+	//
+	// MSG_RESUME_CONSTRUCTION is not like the other no-argument orders: the
+	// SELECTED group is the dozer that will do the work, and the structure to
+	// resume rides as argument 0 (GameLogic::onResumeConstruction reads
+	// getArgument(0) and calls groupResumeConstruction on the selection).
+	// Sending it through the generic path selected the wrong thing and
+	// appended no argument at all, so the engine read a garbage object id and
+	// silently did nothing -- a dozer was ordered back to a stalled power
+	// plant four times and never touched it.
+	if (strcmp(verb, "resume_construction") == 0)
+	{
+		Int targetId = 0;
+		if (!readInt(line, "target", targetId))
+		{
+			reply("error", "resume_construction needs a target structure");
+			return;
+		}
+		Object *target = TheGameLogic->findObjectByID((ObjectID)targetId);
+		if (target == nullptr)
+		{
+			reply("error", "no such structure");
+			return;
+		}
+		if (!selectObjects(line))
+		{
+			reply("error", "resume_construction needs the builder in ids");
+			return;
+		}
+		GameMessage *msg = beginMessage(GameMessage::MSG_RESUME_CONSTRUCTION);
+		if (msg == nullptr)
+		{
+			reply("error", "unsupported order");
+			return;
+		}
+		msg->appendObjectIDArgument((ObjectID)targetId);
+		TheCommandList->appendMessage(msg);
+		reply("ok", "resume_construction");
 		return;
 	}
 
@@ -1375,7 +1548,7 @@ void ActionServer::executeLine( const char *line )
 			return;
 		}
 
-		Player *player = ThePlayerList->getNthPlayer(m_playerIndex);
+		Player *player = ThePlayerList->getNthPlayer(playerIndex());
 		if (player == nullptr || TheBuildAssistant == nullptr)
 		{
 			reply("error", "no such player");
@@ -1521,6 +1694,28 @@ void ActionServer::executeLine( const char *line )
 				body.append(",\"power\":\"");
 				appendEscaped(body, power->getName().str());
 				body.append("\"");
+
+				// The button's command options ride with the order. A carpet
+				// bomb fired with options 0 is accepted and silently does
+				// nothing: canDoSpecialPowerAtLocation reads these bits
+				// (NEED_TARGET_POS, NEED_SPECIAL_POWER_SCIENCE,
+				// CONTEXTMODE_COMMAND -- 672 for the China carpet bomb), and
+				// a client cannot know them without being told.
+				body.append(",\"options\":");
+				appendInt(body, (Int)button->getOptions());
+
+				// The science this power needs before it will fire.
+				// AIGroup/doSpecialPowerAtLocation refuses without it and
+				// says nothing, so a client that cannot see this ends up
+				// ordering superweapons it has not unlocked -- accepted,
+				// ignored, hundreds of times a match.
+				const ScienceType req = power->getRequiredScience();
+				if (req != SCIENCE_INVALID)
+				{
+					body.append(",\"needs_science\":\"");
+					appendEscaped(body, TheScienceStore->getInternalNameForScience(req).str());
+					body.append("\"");
+				}
 			}
 
 			const ThingTemplate *tmpl = button->getThingTemplate();
@@ -1636,7 +1831,7 @@ void ActionServer::executeLine( const char *line )
 			reply("error", "no such object");
 			return;
 		}
-		const Player *player = ThePlayerList->getNthPlayer(m_playerIndex);
+		const Player *player = ThePlayerList->getNthPlayer(playerIndex());
 		if (player != nullptr && obj->getControllingPlayer() != player)
 		{
 			reply("error", "not your object");

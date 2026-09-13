@@ -66,8 +66,12 @@ void RadiusDecalTemplate::createRadiusDecal(const Coord3D& pos, Real radius, con
 	// it is now considered nonEmpty, regardless of the state of m_decal, etc
 	result.m_empty = false;
 
+	// TheSuperHackers @fix getLocalPlayer() is null headless; ask only when
+	// visibility actually depends on who is watching.
+	const Player *localPlayer = ThePlayerList ? ThePlayerList->getLocalPlayer() : nullptr;
 	if (!m_onlyVisibleToOwningPlayer ||
-			owningPlayer->getPlayerIndex() == ThePlayerList->getLocalPlayer()->getPlayerIndex())
+			(localPlayer != nullptr &&
+			 owningPlayer->getPlayerIndex() == localPlayer->getPlayerIndex()))
 	{
 		Shadow::ShadowTypeInfo decalInfo;
 		decalInfo.allowUpdates = FALSE;										// shadow texture will never update
@@ -76,6 +80,18 @@ void RadiusDecalTemplate::createRadiusDecal(const Coord3D& pos, Real radius, con
 		strlcpy(decalInfo.m_ShadowName, m_name.str(), ARRAY_SIZE(decalInfo.m_ShadowName));		// name of your texture
 		decalInfo.m_sizeX = radius*2;									// world space dimensions
 		decalInfo.m_sizeY = radius*2;									// world space dimensions
+
+		// TheSuperHackers @fix TheProjectedShadowManager is created by the W3D
+		// renderer (W3DShadowManager::init), so it is NULL in a headless build.
+		// A radius decal is pure decoration -- the ring drawn under a carpet
+		// bomb's target -- but this is reached from GameLogic, via
+		// DeliverPayloadAIUpdate::deliverPayload on the ObjectCreationList
+		// path. Firing any payload-delivering generals' power therefore made
+		// a virtual call through null and killed a headless engine outright,
+		// which is why a bot could buy a superweapon but never survive using
+		// one. No decal simply means nothing is drawn.
+		if (TheProjectedShadowManager == nullptr)
+			return;
 
 		result.m_decal = TheProjectedShadowManager->addDecal(&decalInfo);
 		if (result.m_decal)

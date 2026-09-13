@@ -133,6 +133,20 @@ public:
 	AsciiString m_skirmishSlots;		///< comma separated slot spec, empty to disable -skirmish
 	AsciiString m_skirmishMap;		///< plain map name for -skirmish, expanded by the launcher
 	UnsignedInt m_skirmishMaxFrames;	///< stop a headless skirmish after this many frames, 0 for no limit
+	Bool m_botJoinEnabled;			///< -botjoinmp given: join a LAN game headlessly and take lobby chat commands
+	AsciiString m_botJoinHost;		///< dotted-quad address of the host to join
+	AsciiString m_botJoinName;		///< the name we appear as, and the word we answer to in chat
+	Bool m_botHostEnabled;			///< -nethost given: host a LAN game headlessly
+	AsciiString m_botHostMap;
+	Bool m_botHostLanLobby;		///< host a plain LAN game (broadcast), not direct connect
+	AsciiString m_lobbyScript;		///< file of chat lines a bot host sends, for testing		///< map to host, as the skirmish launcher names them
+	Int m_botHostPlayers;			///< start once this many players are in the lobby (default 2)
+	AsciiString m_netLocalIP;		///< bind LAN networking to this address instead of the default one.
+	AsciiString m_botFaction;		///< faction the bot asks for, as a word ("China"); resolved once the template store exists
+									///< LANAPI assumes one instance per machine ("everyone has a unique
+									///< IP, so it's ok to use the same port"), so two engines on one box
+									///< need distinct addresses -- 127.0.0.1 and 127.0.0.2 both work,
+									///< the whole 127/8 range is routable. Empty for normal play.
 
 	// GeneralsX @feature BenderAI 21/04/2026 Allow user to opt out of the in-game update checker
 	Bool m_checkForUpdates;

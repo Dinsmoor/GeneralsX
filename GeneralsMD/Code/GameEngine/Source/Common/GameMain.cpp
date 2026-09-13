@@ -30,6 +30,7 @@
 
 #include "Common/FramePacer.h"
 #include "Common/SkirmishLauncher.h"
+#include "Common/BotLanJoin.h"
 #include "Common/GameEngine.h"
 #include "Common/ReplaySimulation.h"
 
@@ -46,7 +47,19 @@ Int GameMain()
 	TheGameEngine = CreateGameEngine();
 	TheGameEngine->init();
 
-	if (!TheGlobalData->m_skirmishSlots.isEmpty())
+	if (TheGlobalData->m_botHostEnabled)
+	{
+		// Headless LAN host: put up a game for other engines (or people) to
+		// join, then play it.
+		exitcode = BotLanJoin::runLanHost();
+	}
+	else if (TheGlobalData->m_botJoinEnabled)
+	{
+		// Headless LAN joiner: join a game somebody else is hosting and play
+		// it, taking lobby instructions from chat.
+		exitcode = BotLanJoin::runLanJoin();
+	}
+	else if (!TheGlobalData->m_skirmishSlots.isEmpty())
 	{
 		// Headless skirmish: start a match from the command line so an agent can
 		// play without the shell UI.

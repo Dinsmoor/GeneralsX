@@ -46,6 +46,7 @@
 #include "GameLogic/GameLogic.h"
 #include "GameNetwork/FileTransfer.h"
 #include "GameNetwork/LANAPICallbacks.h"
+#include "Common/BotLanJoin.h"
 #include "GameNetwork/networkutil.h"
 
 LANAPI *TheLAN = nullptr;
@@ -507,8 +508,10 @@ void LANAPI::OnPlayerJoin( Int slot, UnicodeString playerName )
 		// Someone New Joined.. lets reset the accepts
 		m_currentGame->resetAccepted();
 
+		AsciiString go = GenerateGameOptionsString();
+
 		// Send out the game options
-		RequestGameOptions(GenerateGameOptionsString(), true);
+		RequestGameOptions(go, true);
 	}
 
 	lanUpdateSlotList();
@@ -519,7 +522,13 @@ void LANAPI::OnGameJoin( ReturnType ret, LANGameInfo *theGame )
 	if (ret == RET_OK)
 	{
 		LANbuttonPushed = true;
-		TheShell->push( "Menus/LanGameOptionsMenu.wnd" );
+		// TheSuperHackers @fix TheShell is null in a headless build. A bot
+		// joining a game reaches exactly this line on SUCCESS, so without
+		// the guard the join is what kills it.
+		if (TheShell != nullptr)
+			TheShell->push( "Menus/LanGameOptionsMenu.wnd" );
+		else
+			printf("BotNet: joined the game\n");
 		//lanUpdateSlotList();
 
 		LANPreferences pref;
@@ -538,10 +547,22 @@ void LANAPI::OnGameJoin( ReturnType ret, LANGameInfo *theGame )
 	else if (ret != RET_BUSY)
 	{
 		/// @todo: re-enable lobby controls?  Error msgs?
-		UnicodeString title, body;
-		title = TheGameText->fetch("LAN:JoinFailed");
-		body = getErrorStringFromReturnType(ret);
-		MessageBoxOk(title, body, nullptr);
+		// TheSuperHackers @fix A headless bot has no message boxes; say why
+		// the join failed on stdout instead, where it can be read.
+		if (TheShell == nullptr)
+		{
+			AsciiString why;
+			why.translate(getErrorStringFromReturnType(ret));
+			printf("BotNet: join failed: %s\n", why.str());
+			fflush(stdout);
+		}
+		else
+		{
+			UnicodeString title, body;
+			title = TheGameText->fetch("LAN:JoinFailed");
+			body = getErrorStringFromReturnType(ret);
+			MessageBoxOk(title, body, nullptr);
+		}
 	}
 }
 
@@ -552,7 +573,9 @@ void LANAPI::OnHostLeave()
 		return;
 	LANbuttonPushed = true;
 	DEBUG_LOG(("Host left - popping to lobby"));
-	TheShell->pop();
+	// TheSuperHackers @fix TheShell is null in a headless build.
+	if (TheShell != nullptr)
+		TheShell->pop();
 }
 
 void LANAPI::OnPlayerLeave( UnicodeString player )
@@ -579,7 +602,9 @@ void LANAPI::OnPlayerLeave( UnicodeString player )
 		}
 		LANbuttonPushed = true;
 		DEBUG_LOG(("OnPlayerLeave says we're leaving!  pop away!"));
-		TheShell->pop();
+		// TheSuperHackers @fix TheShell is null in a headless build.
+		if (TheShell != nullptr)
+			TheShell->pop();
 	}
 	else
 	{
@@ -610,7 +635,11 @@ void LANAPI::OnGameCreate( ReturnType ret )
 	{
 
 		LANbuttonPushed = true;
-		TheShell->push( "Menus/LanGameOptionsMenu.wnd" );
+		// TheSuperHackers @fix TheShell is null in a headless build. This is
+		// the HOST's success path -- creating the game would otherwise be
+		// what kills a headless host.
+		if (TheShell != nullptr)
+			TheShell->push( "Menus/LanGameOptionsMenu.wnd" );
 
 		RequestLobbyLeave( false );
 		//RequestGameAnnounce(); // can't do this here, since we don't have a map set
@@ -679,13 +708,23 @@ void LANAPI::OnInActive(UnsignedInt IP) {
 
 void LANAPI::OnChat( UnicodeString player, UnsignedInt ip, UnicodeString message, ChatType format )
 {
+	// TheSuperHackers @feature A headless bot has no chat window and takes
+	// its orders from the lobby instead. This must come first: everything
+	// below needs a GameWindow, and returns early without one, so a bot
+	// would never see a word that was said to it. Its own replies come back
+	// through here too -- handleChat only answers lines addressed to it, so
+	// that does not loop.
+	if (format != LANCHAT_SYSTEM && BotLanJoin::handleChat(player, message))
+		return;
+
 	GameWindow *chatWindow = nullptr;
 
+	// TheSuperHackers @fix TheShell is null in a headless build.
 	if (m_inLobby)
 	{
 		chatWindow = listboxChatWindow;
 	}
-	else if( m_currentGame && m_currentGame->isGameInProgress() && TheShell->isShellActive())
+	else if( m_currentGame && m_currentGame->isGameInProgress() && TheShell != nullptr && TheShell->isShellActive())
 	{
 		chatWindow = listboxChatWindowScoreScreen;
 	}

@@ -12,7 +12,9 @@
 #include "Common/GlobalData.h"
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
+#include "Common/PlayerTemplate.h"   // getSide(), so chat can name a faction
 #include "Common/ThingTemplate.h"
+#include "Common/Geometry.h"        // getMajorRadius, for object footprints
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/PartitionManager.h"
@@ -68,6 +70,18 @@ static const KindOfType KIND_BITS[] = {
 	KINDOF_FS_SUPPLY_CENTER, KINDOF_FS_SUPPLY_DROPZONE, KINDOF_FS_BARRACKS,
 	KINDOF_FS_WARFACTORY, KINDOF_CAN_ATTACK, KINDOF_TRANSPORT,
 	KINDOF_TECH_BUILDING, KINDOF_HERO, KINDOF_PROJECTILE,
+	// CAPTURABLE is what actually decides whether infantry can take a
+	// building. TECH_BUILDING alone was standing in for it, which conflates
+	// "neutral thing worth having" with "thing we can walk in and own".
+	KINDOF_CAPTURABLE, KINDOF_TECH_BASE_DEFENSE, KINDOF_REPAIR_PAD,
+	// Whether infantry can be put INSIDE it. The map's own civilian
+	// bunkers sit beside every expansion dock on Alpine and exported as
+	// bare STRUCTURE, so an agent had no way to tell one from a house:
+	// the bot never garrisoned one in any match, and Tyler named it
+	// watching a replay -- "there's no gattling turret being put up or
+	// any infantry being put in that bunker that came with the map".
+	// Same shape of blindness as FS_AIRFIELD not existing.
+	KINDOF_GARRISONABLE_UNTIL_DESTROYED,
 };
 static const char *const KIND_BIT_NAMES[] = {
 	"STRUCTURE", "INFANTRY", "VEHICLE", "AIRCRAFT",
@@ -76,6 +90,8 @@ static const char *const KIND_BIT_NAMES[] = {
 	"FS_SUPPLY_CENTER", "FS_SUPPLY_DROPZONE", "FS_BARRACKS",
 	"FS_WARFACTORY", "CAN_ATTACK", "TRANSPORT",
 	"TECH_BUILDING", "HERO", "PROJECTILE",
+	"CAPTURABLE", "TECH_BASE_DEFENSE", "REPAIR_PAD",
+	"GARRISONABLE",
 };
 static const Int KIND_BIT_COUNT = sizeof(KIND_BITS) / sizeof(KIND_BITS[0]);
 
@@ -169,6 +185,16 @@ void ObservationServer::init( UnsignedShort port, UnsignedInt frameInterval )
 	m_unitsOnly = TheGlobalData->m_observationUnitsOnly;
 	m_playerIndex = TheGlobalData->m_observationPlayer;
 	m_enabled = TRUE;
+	// TheSuperHackers @fix -obsplayer -1 means "no observing player": the
+	// full view of everything, which is right for after-action analysis and
+	// WRONG for an agent playing a live match -- it would see through the
+	// shroud. In a network game the slot depends on join order, so it cannot
+	// be named on the command line either. -obsplayer -2 means "whichever
+	// slot this machine controls", resolved when the game is running (see
+	// resolvePlayerIndex, called from update()).
+	m_bindToLocalPlayer = (m_playerIndex == OBSERVE_LOCAL_PLAYER);
+	if (m_bindToLocalPlayer)
+		m_playerIndex = -1;
 
 	DEBUG_LOG(("ObservationServer: listening on 127.0.0.1:%d, every %d frame(s)",
 		port, m_frameInterval));
@@ -233,8 +259,30 @@ void ObservationServer::sendRaw( const char *data, Int length )
 	// legitimately take several seconds to drain it. One second was enough when
 	// the grid was empty; it is not now, and dropping the agent mid-map leaves
 	// it with a truncated line and no way to recover.
+	// Raised again for the late game. An observation of a 30-minute match
+	// runs to ~38 KB (a big army, many known objects), and the agent's own
+	// work per tick grows with that army: eighty order sends in one tick,
+	// each owing an ack to drain. Thirty seconds was not enough headroom --
+	// the engine hung up on a perfectly healthy agent at 17:44 and again at
+	// 24:08 of thirty-minute matches, and the game played on with nothing
+	// driving it, which looks exactly like a bot crash and silently
+	// corrupts every measurement taken from that match.
+	//
+	// This only ever fires for an agent that has genuinely stopped reading,
+	// and the cost of waiting longer for one that has is a few idle seconds
+	// at the end of a match; the cost of giving up too early is the match.
 	Int stalledAttempts = 0;
-	const Int MAX_STALLED_ATTEMPTS = 3000;		// ~30 seconds at 10ms per attempt
+	// Three minutes was still not enough. Measured on a 3-player Flash
+	// Effect: the ENGINE took 3 min 7 s of wall time to advance five game
+	// minutes late in the match -- it is the simulation that crawls under
+	// load, not the agent that stops reading. Give it fifteen minutes.
+	//
+	// The cost of being generous is bounded and dull: a genuinely dead
+	// agent leaves the engine writing into a socket nobody drains until
+	// this expires, at the end of a match that is already over. The cost of
+	// being strict is the match itself, and a corrupted measurement that
+	// looks exactly like a bot bug.
+	const Int MAX_STALLED_ATTEMPTS = 90000;		// ~15 minutes at 10ms per attempt
 
 	while (remaining > 0)
 	{
@@ -324,6 +372,55 @@ static Bool isTacticallyRelevant( const ThingTemplate *tmpl )
 	The grid is sampled at the pathfinder's own cell size, so a passability
 	entry lines up with the cells the engine actually pathfinds over.
 */
+/**
+ * Is this pathfind cell walkable by a ground unit?
+ *
+ * The catch is bridges. The engine does not put a bridge deck on the ground
+ * map at all -- each bridge gets its own PathfindLayer (GameType.h: layers 2
+ * through LAYER_LAST-1 are bridges), and the ground cells UNDERNEATH a deck
+ * are deliberately marked CELL_BRIDGE_IMPASSABLE so that units do not walk
+ * through the pilings. Asking LAYER_GROUND alone therefore reports every
+ * bridge on every map as a solid wall, which is exactly what it did: the bot
+ * had no concept of a bridge and would only ever cross water where the map
+ * happened to also provide land.
+ *
+ * So consider the bridge layers too, and take the most permissive answer --
+ * a cell is walkable if the ground is walkable OR any intact bridge spans it.
+ *
+ * A destroyed bridge is skipped, because it genuinely is impassable. Bridges
+ * are ordinary damageable objects (BridgeBehavior::onBodyDamageStateChange
+ * drops them to BODY_RUBBLE), so this is live state, not a map constant.
+ */
+static Bool cellIsWalkable( Int cx, Int cy )
+{
+	Pathfinder *pf = TheAI->pathfinder();
+
+	// Pathfinder::getCell falls back to the ground map whenever a layer has
+	// no cell at these coordinates, so a layer that does not reach here
+	// simply re-reports the ground answer rather than lying. That also means
+	// an unused layer costs us nothing but a repeated ground lookup.
+	//
+	// A destroyed bridge needs no special case: PathfindLayer::setDestroyed
+	// re-runs classifyCells, which re-types every deck cell to
+	// CELL_BRIDGE_IMPASSABLE, and that is rejected below like any other
+	// impassable cell.
+	for (Int layer = LAYER_GROUND; layer <= LAYER_LAST; ++layer)
+	{
+		PathfindCell *cell = pf->getCell((PathfindLayerEnum)layer, cx, cy);
+		// Off the edge of the pathfind grid is not walkable either.
+		if (cell == nullptr)
+			continue;
+
+		const PathfindCell::CellType t = cell->getType();
+		if (t != PathfindCell::CELL_WATER &&
+				t != PathfindCell::CELL_CLIFF &&
+				t != PathfindCell::CELL_IMPASSABLE &&
+				t != PathfindCell::CELL_BRIDGE_IMPASSABLE)
+			return TRUE;
+	}
+	return FALSE;
+}
+
 void ObservationServer::buildMapDescription()
 {
 
@@ -443,15 +540,9 @@ void ObservationServer::buildMapDescription()
 			Bool passable = TRUE;
 			if (TheAI != nullptr && TheAI->pathfinder() != nullptr)
 			{
-				PathfindCell *cell = TheAI->pathfinder()->getCell(
-					LAYER_GROUND,
+				passable = cellIsWalkable(
 					REAL_TO_INT(wx / PATHFIND_CELL_SIZE_F),
 					REAL_TO_INT(wy / PATHFIND_CELL_SIZE_F));
-				// Off the edge of the pathfind grid is not walkable either.
-				passable = (cell != nullptr) &&
-									 (cell->getType() != PathfindCell::CELL_WATER) &&
-									 (cell->getType() != PathfindCell::CELL_CLIFF) &&
-									 (cell->getType() != PathfindCell::CELL_IMPASSABLE);
 			}
 			else if (TheTerrainLogic != nullptr)
 			{
@@ -1114,15 +1205,50 @@ void ObservationServer::buildObservation( std::string &out )
 						if (mod == nullptr)
 							continue;
 
+						// The player's own path (Player::findMostReadyShortcutSpecialPowerOfType,
+						// via doFindSpecialPowerSourceObject) refuses an object that is
+						// under construction, sold or dead, and refuses a module that is
+						// script-only. A source that fails any of these is not a source a
+						// human could ever have fired from, so it must not be offered.
+						if (o->testStatus(OBJECT_STATUS_UNDER_CONSTRUCTION)
+								|| o->testStatus(OBJECT_STATUS_SOLD)
+								|| o->isEffectivelyDead()
+								|| mod->isScriptOnly())
+							continue;
+
 						seenPower[p] = TRUE;
+
+						// Readiness, WITHOUT starting any clock.
+						//
+						// SpecialPowerModule::getReadyFrame() forwards a SharedSyncedTimer
+						// power to Player::getOrStartSpecialPowerReadyFrame(), which CREATES
+						// the timer when it is absent. Calling it from here started every
+						// superweapon's shared timer at frame 0 -- so the power reported
+						// ready:1 ready_frame:0 forever, and the firing path later found a
+						// timer the logic never meant to exist. The observer must not write.
+						UnsignedInt readyFrame;
+						Bool haveFrame;
+						if (spt->isSharedNSync())
+							haveFrame = player->peekSharedSpecialPowerReadyFrame(spt, readyFrame);
+						else
+						{
+							readyFrame = mod->getReadyFrame();
+							haveFrame = TRUE;
+						}
+
+						// A shared power with no timer yet has not been unlocked: it is
+						// not ready, and it has no meaningful ready frame. Say so rather
+						// than inventing one.
+						const Bool ready = haveFrame && readyFrame < TheGameLogic->getFrame();
+
 						if (!firstPower)
 							out += ',';
 						firstPower = FALSE;
 
 						snprintf(powerChunk, sizeof(powerChunk),
-							"{\"name\":\"%.48s\",\"source\":%d,\"ready\":%d,\"ready_frame\":%u}",
+							"{\"name\":\"%.48s\",\"source\":%d,\"ready\":%d,\"ready_frame\":%d}",
 							spt->getName().str(), (Int)o->getID(),
-							mod->isReady() ? 1 : 0, (UnsignedInt)mod->getReadyFrame());
+							ready ? 1 : 0, haveFrame ? (Int)readyFrame : -1);
 						out += powerChunk;
 					}
 				}
@@ -1131,12 +1257,19 @@ void ObservationServer::buildObservation( std::string &out )
 		}
 		else
 		{
-			// An opponent's bank balance and power grid are not observable.
-			// Whether they have been defeated is announced to everyone.
-			scratch.format("{\"index\":%d,\"self\":0,\"relation\":%d,\"defeated\":%d}",
+			/*	An opponent's bank balance and power grid are not
+				observable. Whether they have been defeated is announced
+				to everyone, and so is their SIDE: every player picks a
+				faction in the lobby in full view, so naming it here
+				leaks nothing -- it is what lets a human say "attack the
+				GLA player" and have the bot know who that is.
+			*/
+			const PlayerTemplate *ptmpl = player->getPlayerTemplate();
+			scratch.format("{\"index\":%d,\"self\":0,\"relation\":%d,\"defeated\":%d,\"side\":\"%.24s\"}",
 				player->getPlayerIndex(),
 				relation,
-				player->isPlayerActive() ? 0 : 1);
+				player->isPlayerActive() ? 0 : 1,
+				ptmpl ? ptmpl->getSide().str() : "");
 		}
 		out += scratch.str();
 	}
@@ -1169,6 +1302,50 @@ void ObservationServer::buildObservation( std::string &out )
 		}
 		out += ']';
 	}
+
+	/*	Chat seen since the last observation.
+
+		Emitted before the objects array purely so the big array stays
+		last and this cannot disturb its assembly. "scope" is derived
+		here rather than in the agent because the mask's meaning is an
+		engine detail: a mask naming exactly one slot -- ours -- is a
+		private line, one naming a subset is team chat, and the full set
+		is global. The raw mask is kept too so the agent can be precise
+		if it ever needs to be.
+	*/
+	out += ",\"chat\":[";
+	{
+		Bool firstChat = TRUE;
+		for (size_t ci = 0; ci < m_chat.size(); ++ci)
+		{
+			const ChatLine &c = m_chat[ci];
+			if (!firstChat)
+				out += ',';
+			firstChat = FALSE;
+
+			// Count the addressed slots to tell private from team from all.
+			// Counted over the whole mask rather than MAX_SLOTS so this
+			// file needs no GameNetwork header for one loop bound.
+			Int addressed = 0;
+			for (UnsignedInt bit = (UnsignedInt)c.playerMask; bit; bit &= bit - 1)
+				++addressed;
+
+			const char *scope = "team";
+			if (addressed <= 1)
+				scope = "private";
+			else if (addressed >= numPlayers && numPlayers > 0)
+				scope = "global";
+
+			scratch.format("{\"from\":%d,\"mask\":%d,\"frame\":%u,\"scope\":\"%s\",\"text\":\"",
+				c.senderSlot, c.playerMask, c.frame, scope);
+			out += scratch.str();
+			out += c.text;			// already escaped by recordChat
+			out += "\"}";
+		}
+	}
+	out += ']';
+	// Drained: each line is reported exactly once.
+	m_chat.clear();
 
 	out += ",\"objects\":[";
 
@@ -1250,6 +1427,34 @@ void ObservationServer::buildObservation( std::string &out )
 			isOwn ? 1 : 0,
 			fogged ? 0 : 1);
 		out += scratch.str();
+
+		/*	How big it is on the ground -- for IMMOBILE things only.
+
+		An agent siting a building has to know what it must clear, and the
+		buildable-template list cannot tell it: that list holds what this
+		player can BUILD, and the thing most often in the way is scenery --
+		a supply dock, a civilian building, a tech structure -- which is in
+		no one's build menu.
+
+		The cost of not exporting it, measured: the bot sited its supply
+		centre on a ring 70 units from the dock, which is inside the dock's
+		own footprint, so every candidate came back objects_in_the_way. It
+		never built a supply centre, and with no supply centre it could not
+		meet the War Factory's prerequisite either -- 24 minutes, no
+		economy, no vehicles, $25,700 banked and unspendable, from one
+		unknown radius.
+
+		Immobile only, because a moving unit's footprint is not an obstacle
+		worth planning around (friendly units step aside when you build)
+		and every byte here is multiplied by every object every snapshot.
+	*/
+		if (tmpl->isKindOf(KINDOF_IMMOBILE) || tmpl->isKindOf(KINDOF_STRUCTURE))
+		{
+			const GeometryInfo &g = tmpl->getTemplateGeometryInfo();
+			scratch.format(",\"footprint\":[%.0f,%.0f]",
+				g.getMajorRadius(), g.getMinorRadius());
+			out += scratch.str();
+		}
 
 		// What it is, how far it sees and shoots (tooltip knowledge), and its
 		// veterancy (the chevrons drawn over every unit). Ranges are live
@@ -1449,6 +1654,120 @@ void ObservationServer::buildObservation( std::string &out )
 }
 
 // ------------------------------------------------------------------------------------------------
+/**
+ * Bind to the local player once the game has one.
+ *
+ * Called every frame while unresolved: ThePlayerList does not exist yet when
+ * init() runs, and in a network game the local slot is not known until the
+ * game starts.
+ */
+void ObservationServer::resolvePlayerIndex()
+{
+	if (!m_bindToLocalPlayer || ThePlayerList == nullptr)
+		return;
+
+	const Player *local = ThePlayerList->getLocalPlayer();
+	if (local == nullptr)
+		return;
+
+	/*	Do not latch onto player 0.
+
+		This runs every frame from update(), and at frame 0 of a NETWORK
+		game the local player is not assigned yet -- getLocalPlayer()
+		returns the neutral player at index 0. Latching there bound both
+		engines of a LAN match to the same empty slot: identical
+		observations, $0, no units, and both bots convinced they shared a
+		base. Index 0 is never a playable slot (it is the neutral/civilian
+		player), so treat it as "not resolved yet" and keep looking.
+	*/
+	const Int idx = local->getPlayerIndex();
+	if (idx <= 0)
+		return;
+
+	m_playerIndex = idx;
+	m_bindToLocalPlayer = FALSE;
+	DEBUG_LOG(("ObservationServer: observing the local player, slot %d",
+		m_playerIndex));
+}
+
+//-------------------------------------------------------------------------------------------------
+/**
+	Escape a string for embedding in JSON.
+
+	Every other string this server emits is an engine-controlled
+	identifier -- a template name, a waypoint, a science -- so none of
+	them has ever needed escaping. Chat is the FIRST player-authored text
+	to cross this boundary, and a single double-quote or backslash in a
+	chat line would otherwise produce malformed JSON and break the
+	agent's parser mid-match. Control characters are escaped for the same
+	reason.
+
+	Bytes >= 0x80 are passed through untouched: the source is UTF-8 and
+	JSON accepts it directly.
+*/
+static std::string jsonEscape( const char *in )
+{
+	std::string out;
+	if (in == nullptr)
+		return out;
+	for (const unsigned char *p = (const unsigned char *)in; *p; ++p)
+	{
+		switch (*p)
+		{
+			case '"':  out += "\\\""; break;
+			case '\\': out += "\\\\"; break;
+			case '\n': out += "\\n";  break;
+			case '\r': out += "\\r";  break;
+			case '\t': out += "\\t";  break;
+			default:
+				if (*p < 0x20)
+				{
+					char esc[8];
+					snprintf(esc, sizeof(esc), "\\u%04x", (unsigned)*p);
+					out += esc;
+				}
+				else
+				{
+					out += (char)*p;
+				}
+				break;
+		}
+	}
+	return out;
+}
+
+//-------------------------------------------------------------------------------------------------
+void ObservationServer::recordChat( Int senderSlot, const UnicodeString &text, Int playerMask )
+{
+	if (!m_enabled)
+		return;
+
+	/*	Bound the buffer.
+
+		Nothing drains this until an observation is built, and an
+		observation is only built while a client is connected and in a
+		running match. Chat arriving outside that window -- or faster
+		than the frame interval -- would otherwise accumulate forever.
+		Dropping the OLDEST keeps the most recent orders, which is what
+		matters for a command channel.
+	*/
+	if (m_chat.size() >= (size_t)MAX_CHAT_BUFFERED)
+		m_chat.erase(m_chat.begin());
+
+	ChatLine line;
+	line.senderSlot = senderSlot;
+	line.playerMask = playerMask;
+	line.frame = (TheGameLogic != nullptr) ? TheGameLogic->getFrame() : 0;
+
+	// UnicodeString is UTF-16; translate to the UTF-8 the stream carries.
+	AsciiString utf8;
+	utf8.translate(text);
+	line.text = jsonEscape(utf8.str());
+
+	m_chat.push_back(line);
+}
+
+//-------------------------------------------------------------------------------------------------
 void ObservationServer::update()
 {
 	if (!m_enabled)
@@ -1460,6 +1779,8 @@ void ObservationServer::update()
 	if (TheGameLogic == nullptr || !TheGameLogic->isInGame() ||
 			TheGameLogic->isInShellGame() || ThePlayerList == nullptr)
 		return;
+
+	resolvePlayerIndex();
 
 	if (m_clientSocket == INVALID_SOCKET)
 	{

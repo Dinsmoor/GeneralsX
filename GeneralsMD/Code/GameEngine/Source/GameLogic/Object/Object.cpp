@@ -944,7 +944,8 @@ void Object::setOrRestoreTeam( Team* team, Bool restoring )
 	// Tell TheInGameUI that the object has changed hands
 	Int oldPlayerIndex = (oldTeam)?(oldTeam->getControllingPlayer()->getPlayerIndex()):-1;
 	Int newPlayerIndex = (m_team)?(m_team->getControllingPlayer()->getPlayerIndex()):-1;
-	if (oldPlayerIndex != newPlayerIndex)
+	// TheSuperHackers @fix TheInGameUI is null in a headless build.
+	if (oldPlayerIndex != newPlayerIndex && TheInGameUI)
 		TheInGameUI->objectChangedTeam(this, oldPlayerIndex, newPlayerIndex);
 }
 

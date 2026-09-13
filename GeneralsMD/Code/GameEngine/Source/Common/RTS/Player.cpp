@@ -3366,6 +3366,28 @@ void Player::expressSpecialPowerReadyFrame( const SpecialPowerTemplate *temp, Un
 
 
 //-------------------------------------------------------------------------------------------------
+//-------------------------------------------------------------------------------------------------
+// TheSuperHackers @observer Read-only companion to getOrStartSpecialPowerReadyFrame.
+// Reports the shared timer if one exists; creates nothing. An observation
+// path must use this -- calling the getter starts the timer as a side effect.
+//-------------------------------------------------------------------------------------------------
+Bool Player::peekSharedSpecialPowerReadyFrame( const SpecialPowerTemplate *temp,
+																							 UnsignedInt &readyFrame ) const
+{
+	const UnsignedInt lookupID = temp->getID();
+	SpecialPowerReadyTimerListConstIterator it;
+	for( it = m_specialPowerReadyTimerList.begin();
+			 it != m_specialPowerReadyTimerList.end(); ++it )
+	{
+		if ( it->m_templateID == lookupID )
+		{
+			readyFrame = it->m_readyFrame;
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
 UnsignedInt Player::getOrStartSpecialPowerReadyFrame( const SpecialPowerTemplate *temp)
 {
 

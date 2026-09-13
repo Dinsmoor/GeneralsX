@@ -72,7 +72,9 @@ private:
 	Bool selectObjects( const char *json );
 
 	Bool			m_enabled;
-	Int				m_playerIndex;			///< the player whose orders these are
+	Int				m_playerIndex;			///< the player whose orders these are, or -1 for "the local player"
+
+	Int				playerIndex() const;	///< resolves m_playerIndex, or the local player when it is -1
 	UnsignedInt		m_listenSocket;			///< SOCKET, kept opaque here
 	UnsignedInt		m_clientSocket;			///< SOCKET, or invalid when idle
 	class AsciiString*	m_pending;			///< partial line carried between frames

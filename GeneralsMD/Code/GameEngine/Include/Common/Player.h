@@ -357,6 +357,15 @@ public:
 	void resetOrStartSpecialPowerReadyFrame( const SpecialPowerTemplate *temp );
 	///< my new command center wants to init his timers to the status quo
 	UnsignedInt getOrStartSpecialPowerReadyFrame( const SpecialPowerTemplate *temp);
+
+	// TheSuperHackers @observer A strictly read-only view of the shared
+	// special-power timer. getOrStartSpecialPowerReadyFrame() CREATES the
+	// timer when it is missing, so an observer that calls it to report a
+	// cooldown silently starts every superweapon's clock at frame 0 --
+	// state the logic intended to create only when the science is bought.
+	// Returns FALSE when no timer exists yet, and never mutates anything.
+	Bool peekSharedSpecialPowerReadyFrame( const SpecialPowerTemplate *temp,
+																				 UnsignedInt &readyFrame ) const;
 	void expressSpecialPowerReadyFrame( const SpecialPowerTemplate *temp, UnsignedInt frame );
 	void addNewSharedSpecialPowerTimer( const SpecialPowerTemplate *temp, UnsignedInt frame );
 
@@ -824,6 +833,7 @@ private:
 
 	typedef std::list<SpecialPowerReadyTimerType> SpecialPowerReadyTimerList;
 	typedef SpecialPowerReadyTimerList::iterator SpecialPowerReadyTimerListIterator;
+	typedef SpecialPowerReadyTimerList::const_iterator SpecialPowerReadyTimerListConstIterator;
 	SpecialPowerReadyTimerList m_specialPowerReadyTimerList;
 
 	Squad									*m_squads[NUM_HOTKEY_SQUADS];	///< The hotkeyed squads

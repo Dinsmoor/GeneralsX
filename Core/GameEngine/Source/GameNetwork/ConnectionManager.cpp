@@ -28,6 +28,8 @@
 #include "Compression.h"
 #include "WWLib/strtok_r.h"
 #include "Common/AudioEventRTS.h"
+#include "Common/ObservationServer.h"
+#include "GameClient/LanguageFilter.h"   // BotSendChat filters like the chat UI
 #include "Common/CRCDebug.h"
 #include "Common/Debug.h"
 #include "Common/file.h"
@@ -735,6 +737,39 @@ void ConnectionManager::processDisconnectChat(NetDisconnectChatCommandMsg *msg)
 	TheDisconnectMenu->showChat(unitext); // <-- need to implement this
 }
 
+/**
+	Send a line of chat on behalf of the action server.
+
+	Lives HERE, not in ActionServer.cpp, because reaching TheNetwork from
+	there means including NetworkInterface.h -> ConnectionManager.h ->
+	Transport.h -> udp.h, and udp.h includes <winsock.h> -- winsock 1.
+	ActionServer.cpp already uses <winsock2.h> for its own socket, and the
+	two cannot coexist in one translation unit: VC6 reports every winsock
+	function as "redefinition; different linkage" and then resolves calls
+	like htons and bind as function POINTERS, producing a dozen errors
+	pointing at socket code that has not changed in months.
+
+	One small function on this side of the fence keeps the network headers
+	where they already are. The action server declares just this symbol.
+
+	Returns FALSE when there is no network game, so the caller can say so
+	rather than pretending the line was sent.
+*/
+Bool BotSendChat( UnicodeString text, Int playerMask )
+{
+	if (TheNetwork == nullptr)
+		return FALSE;
+
+	// The UI filters what a human types; a bot goes through the same
+	// filter so it cannot emit what a person would have been stopped from.
+	if (TheLanguageFilter != nullptr)
+		TheLanguageFilter->filterLine(text);
+
+	TheNetwork->sendChat(text, playerMask);
+	return TRUE;
+}
+
+//-------------------------------------------------------------------------------------------------
 void ConnectionManager::processChat(NetChatCommandMsg *msg)
 {
 	UnicodeString unitext;
@@ -751,6 +786,41 @@ void ConnectionManager::processChat(NetChatCommandMsg *msg)
 		name = m_connections[playerID]->getUser()->GetName();
 		//DEBUG_LOG(("connection is non-null, using %ls", name.str()));
 	}
+	/*	Hand every line to the agent, before anything renders it.
+
+		processChat is the single funnel all in-game chat passes through --
+		global and team alike -- so it is the one place that sees every
+		line exactly once. The call sits ABOVE the TheInGameUI and TheAudio
+		calls below deliberately: both are null in a headless build, and
+		the observer must not sit behind a render path that does not exist.
+		Same class of trap as the null client singletons that killed the
+		engine on generals powers.
+
+		Reported regardless of mask or mute: the agent's own filtering is
+		its business, and an agent reading its opponent needs what a human
+		would have on screen.
+	*/
+	if (TheObservationServer != nullptr)
+	{
+		/*	Report the PLAYER INDEX, not the slot.
+
+			They are different numbers with an explicit mapping
+			(PlayerList::getPlayerFromSlotIndex), and everything else the
+			observation stream emits is keyed by player index. Publishing a
+			slot here would make "who said this" silently fail to match
+			"who is this player" -- the bot would ignore its commander, or
+			worse, fail to recognise its own echo and obey itself.
+
+			-1 when the slot maps to no player (an observer, or a slot that
+			has left); the line is still reported, since hearing it is
+			useful even when we cannot attribute it.
+		*/
+		const Player *chatPlayer = (ThePlayerList != nullptr)
+			? ThePlayerList->getPlayerFromSlotIndex(playerID) : nullptr;
+		const Int chatIndex = (chatPlayer != nullptr) ? chatPlayer->getPlayerIndex() : -1;
+		TheObservationServer->recordChat(chatIndex, msg->getText(), msg->getPlayerMask());
+	}
+
 	unitext.format(L"[%ls] %ls", name.str(), msg->getText().str());
 //	DEBUG_LOG(("ConnectionManager::processChat - got message from player %d (mask %8.8X), message is %ls", playerID, msg->getPlayerMask(), unitext.str()));
 

@@ -83,6 +83,8 @@ set(GAMEENGINE_SRC
 #    Include/Common/MultiplayerSettings.h
 #    Include/Common/NameKeyGenerator.h
     Include/Common/ObjectStatusTypes.h
+    Include/Common/BotConfig.h
+    Include/Common/BotLanJoin.h
     Include/Common/SkirmishLauncher.h
     Include/Common/ActionServer.h
     Include/Common/ObservationServer.h
@@ -589,6 +591,8 @@ set(GAMEENGINE_SRC
 #    Source/Common/GameMain.cpp
     Source/Common/GameUtility.cpp
 #    Source/Common/GlobalData.cpp
+    Source/Common/BotConfig.cpp
+    Source/Common/BotLanJoin.cpp
     Source/Common/SkirmishLauncher.cpp
     Source/Common/ActionServer.cpp
     Source/Common/ObservationServer.cpp

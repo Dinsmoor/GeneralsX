@@ -39,6 +39,7 @@
 #include "Common/PlayerList.h"
 #include "Common/GameAudio.h"
 #include "Common/GameEngine.h"
+#include "Common/ActionServer.h"
 #include "Common/INI.h"
 #include "Common/INIException.h"
 #include "Common/MessageStream.h"
@@ -1032,8 +1033,17 @@ void GameEngine::update()
 			TheGameClient->UPDATE();
 			TheMessageStream->propagateMessages();
 
+			// TheSuperHackers @fix An external agent's orders must be on
+			// TheCommandList BEFORE Network::update drains it, or they are
+			// never sent to the other players and desync this machine at
+			// once. In a single-player game the agent is polled inside
+			// GameLogic::update() instead, where the recorder ordering
+			// matters; the two sites are mutually exclusive.
 			if (TheNetwork != nullptr)
 			{
+				if (TheActionServer != nullptr)
+					TheActionServer->update();
+
 				TheNetwork->UPDATE();
 			}
 

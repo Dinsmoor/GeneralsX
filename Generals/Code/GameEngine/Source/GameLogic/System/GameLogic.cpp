@@ -1992,6 +1992,29 @@ void GameLogic::tryStartNewGame( Bool loadingSaveGame )
 	while(!isProgressComplete())
 	{
 		updateLoadProgress(101); // keep greater then 100
+
+		// TheSuperHackers @fix Pump the network while waiting at the
+		// load barrier even when there is no load screen.
+		//
+		// This loop is a rendezvous: nobody runs frame 0 until every human
+		// slot has sent NetLoadCompleteCommandMsg. Those packets only get
+		// depacketized by Network::liteupdate(), and on a normal client the
+		// only thing calling it here is MultiPlayerLoadScreen::update() --
+		// reached via updateLoadProgress() above, which is guarded on
+		// m_loadScreen. A headless client has no load screen, so it waited
+		// deaf: the peer's "load complete" arrived at a socket nobody
+		// drained, and both sides escaped only via m_forceGameStartByTimeOut
+		// -- at different moments, which desyncs a lockstep game at the
+		// first command.
+		//
+		// updateLoadProgress(101) deliberately sends nothing (the
+		// percent <= 100 guard), so this pumps without adding traffic and
+		// the wire protocol is unchanged. Guarded on m_loadScreen so a
+		// client that already pumped through its load screen does not do it
+		// twice.
+		if (!m_loadScreen && isInMultiplayerGame() && TheNetwork)
+			TheNetwork->liteupdate();
+
 		testTimeOut();
 		Sleep(100);
 	}

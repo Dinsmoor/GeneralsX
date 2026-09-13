@@ -31,6 +31,7 @@
 #endif
 
 #include "Common/ArchiveFileSystem.h"
+#include "Common/BotConfig.h"
 #include "Common/CommandLine.h"
 #include "Common/CRCDebug.h"
 #include "Common/LocalFileSystem.h"
@@ -979,6 +980,25 @@ Int parseActionPlayer(char *args[], int num)
 	return 1;
 }
 
+/**
+	-botconfig <file.ini> : everything about a headless bot in one file.
+
+	Replaced six separate flags (-botjoinmp, -nethost, -nethostlan,
+	-netlocalip, -botname, -lobbyscript) plus the observation and action
+	server settings. Those flags only ever made sense in combination, and a
+	command line long enough to hold all of them was long enough to hide a
+	typo. See BotConfig.h for the keys.
+*/
+Int parseBotConfig(char *args[], int num)
+{
+	if (num > 1)
+	{
+		BotConfig::load(AsciiString(args[1]));
+		return 2;
+	}
+	return 1;
+}
+
 Int parseSkirmishMap(char *args[], int num)
 {
 	if (num > 1)
@@ -1301,6 +1321,7 @@ static CommandLineParam paramsForStartup[] =
 	{ "-obsplayer", parseObservationPlayer },
 	{ "-actport", parseActionPort },
 	{ "-actplayer", parseActionPlayer },
+	{ "-botconfig", parseBotConfig },
 	{ "-skirmish", parseSkirmish },
 	{ "-skirmishmap", parseSkirmishMap },
 	{ "-skirmishframes", parseSkirmishMaxFrames },
