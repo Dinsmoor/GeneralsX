@@ -117,6 +117,16 @@ public:
 	// virtual destructor prototype provided by memory pool declaration
 
 	void awardInitialCaptureBonus( Player *player );	// Test and award the initial capture bonus
+
+	// What this building pays, for an observer. KINDOF_TECH_BUILDING is one
+	// bit covering oil derricks, hospitals and radio stations alike, so
+	// "is it a tech building" cannot answer "does it pay" -- and the only
+	// alternative for an external agent was matching template names, which
+	// is a guess about what a map calls things. The engine knows; this
+	// says so. Read-only, and the module data is already parsed.
+	Int friend_getDepositAmount() const { return getAutoDepositUpdateModuleData()->m_depositAmount; }
+	UnsignedInt friend_getDepositFrames() const { return getAutoDepositUpdateModuleData()->m_depositFrame; }
+	Int friend_getCaptureBonus() const { return getAutoDepositUpdateModuleData()->m_initialCaptureBonus; }
 	virtual UpdateSleepTime update() override;
 
 protected:
