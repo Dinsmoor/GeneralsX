@@ -133,6 +133,7 @@ public:
 	virtual Bool AmIHost() = 0;																											///< Am I hosting a game?
 	virtual inline UnicodeString GetMyName() = 0;																		///< What's my name?
 	virtual inline LANGameInfo *GetMyGame() = 0;															          ///< What's my Game?
+	virtual LANGameInfo *GetGames() = 0;															///< Head of the discovered game list (read-only walk via getNext)
 	virtual void fillInLANMessage( LANMessage *msg ) = 0;																	///< Fill in default params
 	virtual void checkMOTD() = 0;
 };
@@ -301,6 +302,10 @@ public:
 
 	// Request functions generate network traffic
 	virtual void RequestLocations() override;																				///< Request everybody to respond with where they are
+	// TheSuperHackers @observer Read-only view of the discovered LAN games.
+	// Returns the list head; walk it with getNext(). Creates nothing and
+	// sends nothing -- discovery itself is RequestLocations() above.
+	virtual LANGameInfo *GetGames() override { return m_games; }
 	virtual void RequestGameJoin( LANGameInfo *game, UnsignedInt ip = 0 ) override;				///< Request to join a game
 	virtual void RequestGameJoinDirectConnect( UnsignedInt ipaddress ) override;						///< Request to join a game at an IP address
 	virtual void RequestGameLeave() override;																				///< Tell everyone we're leaving

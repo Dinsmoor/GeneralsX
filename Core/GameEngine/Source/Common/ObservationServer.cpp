@@ -859,13 +859,21 @@ void ObservationServer::buildMapDescription()
 				"\"armor\":%d,\"dmg\":%d,\"damage\":%.0f,\"shot_ms\":%d,\"anti\":%d,"
 				"\"clip\":%d,\"reload_ms\":%d,\"splash\":%.0f,"
 				"\"min_range\":%.0f,\"scatter\":%.0f,\"hp\":%.0f,"
-				"\"crusher\":%d,\"crushable\":%d,\"squishable\":%d}",
+				"\"crusher\":%d,\"crushable\":%d,\"squishable\":%d,"
+				// Power. Positive produces, negative consumes -- straight from
+				// the INI's EnergyProduction (the header comment in
+				// ThingTemplate.h claims the opposite and is stale; the field
+				// is parsed verbatim). A superweapon is the first building
+				// whose draw the bot cannot absorb by accident: China's
+				// Nuclear Missile Launcher is -10 against a Power Plant's +5.
+				"\"energy\":%d}",
 				t->getName().str(), (Int)t->getTemplateID(), cost, t->calcTimeToBuild(observing),
 				observing->canBuild(t) ? 1 : 0,
 				kindMask(t), geom.getMajorRadius(), geom.getMinorRadius(),
 				templateRange(t), armorIdx, dmgIdx, damage, shotDelay, anti,
 				clipSize, clipReload, splash, minRange, scatter, maxHealth,
-				(Int)t->getCrusherLevel(), (Int)t->getCrushableLevel(), squishable);
+				(Int)t->getCrusherLevel(), (Int)t->getCrushableLevel(), squishable,
+				(Int)t->getEnergyProduction());
 			// Splice the weapons array in before the closing brace.
 			body.append(chunk, strlen(chunk) - 1);
 			body += weapons.str();
@@ -1527,12 +1535,17 @@ void ObservationServer::buildObservation( std::string &out )
 			}
 		}
 
-		const Int vet = (Int)obj->getVeterancyLevel();
-		if (vet > (Int)LEVEL_REGULAR)
-		{
-			scratch.format(",\"vet\":%d", vet);
-			out += scratch.str();
-		}
+		// ALWAYS EMITTED, even at regular. This used to be omitted for
+		// LEVEL_REGULAR to save bytes, which made "veteran 0" and "the
+		// exporter does not send this" indistinguishable to a consumer --
+		// so an agent reading the stream could not tell a fresh unit from
+		// an old engine, and defaulting the missing field to 0 is only
+		// right by luck. Veterancy is not cosmetic: it scales damage and
+		// health, and for a China hacker it scales INCOME directly
+		// (ChinaInfantry.ini pays 5/6/8/10 per CashUpdateDelay by level, so
+		// a heroic hacker earns exactly twice a regular one).
+		scratch.format(",\"vet\":%d", (Int)obj->getVeterancyLevel());
+		out += scratch.str();
 
 		// Passengers in a transport or garrison are counted on its UI.
 		// Which structure or transport this object is riding in, if any: the
