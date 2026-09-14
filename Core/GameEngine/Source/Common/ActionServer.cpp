@@ -657,6 +657,21 @@ void ActionServer::executeLine( const char *line )
 		if (count > 200)
 			count = 200;
 
+		// Layout and facing. Both exist because the lab's own caveat -- that
+		// it can only measure a head-on meeting of two blobs -- is a caveat
+		// about the SPAWN, not about the fight. A group's shape when contact
+		// is made, and which way it is already pointing, are things a real
+		// engagement decides and this verb previously could not express.
+		Real spacing = 15.0f, facing = 0.0f;
+		Int perRow = 5;
+		readReal(line, "spacing", spacing);
+		readReal(line, "facing", facing);       // degrees, engine convention
+		readInt(line, "per_row", perRow);
+		if (perRow < 1)
+			perRow = 1;
+		if (spacing < 1.0f)
+			spacing = 1.0f;
+
 		const ThingTemplate *tmpl = TheThingFactory->findTemplate(what);
 		if (tmpl == nullptr)
 		{
@@ -678,22 +693,37 @@ void ActionServer::executeLine( const char *line )
 			return;
 		}
 
-		// Lay them out in a block so they do not all land on one another; the
+		// Lay them out in a grid so they do not all land on one another; the
 		// engine will sort out the overlap but a tidy start makes a measured
-		// fight repeatable.
-		const Real spacing = 15.0f;
-		const Int perRow = 5;
+		// fight repeatable. per_row shapes it: count for a line abreast, 1
+		// for a column, the default 5 for a block.
+		//
+		// The grid is built in local coordinates and then ROTATED by the
+		// facing, so that "a line abreast, facing the enemy" stays a line
+		// abreast whichever bearing the enemy is on.
+		const Real rad = facing * (Real)(PI / 180.0);
+		const Real cs = (Real)cos(rad), sn = (Real)sin(rad);
 		Int made = 0;
 		for (Int i = 0; i < count; ++i)
 		{
 			Object *obj = TheThingFactory->newObject(tmpl, team);
 			if (obj == nullptr)
 				continue;
+			// Local frame: +x is to the group's right, +y is its front.
+			const Real lx = ((Real)(i % perRow) - (Real)(perRow - 1) * 0.5f) * spacing;
+			const Real ly = -(Real)(i / perRow) * spacing;
 			Coord3D where;
-			where.x = x + (Real)(i % perRow) * spacing;
-			where.y = y + (Real)(i / perRow) * spacing;
-			where.z = 0.0f;
+			where.x = x + lx * cs - ly * sn;
+			where.y = y + lx * sn + ly * cs;
+			// setPosition takes z LITERALLY unless the template is
+			// KINDOF_STICK_TO_TERRAIN_SLOPE, which vehicles are not. Spawning
+			// at z=0 puts them at sea level, under the map on any raised
+			// ground -- which would quietly invalidate every measurement made
+			// anywhere but a flat plain.
+			where.z = (TheTerrainLogic != nullptr)
+				? TheTerrainLogic->getGroundHeight(where.x, where.y) : 0.0f;
 			obj->setPosition(&where);
+			obj->setOrientation(rad);
 			++made;
 		}
 
