@@ -18,7 +18,11 @@
 **	    role     = join          ; join | host
 **	    host     = 192.168.1.10  ; the host's address (role=join)
 **	    map      = Alpine Assault ; the map to host (role=host)
-**	    players  = 2             ; start once this many are in (role=host)
+**	    players  = 2             ; total SEATS, humans and AI (role=host)
+**	    slots    = medium,medium ; what sits in slots 1..n; slot 0 is us
+**	                             ;   open | closed | easy | medium | hard
+**	    teams    = 1,2,1,2       ; team per slot INCLUDING slot 0, 1-based,
+**	                             ;   "-" for none
 **	    lanLobby = no            ; host a broadcast LAN game, not direct connect
 **	    name     = Claude        ; lobby name, and the word we answer to
 **	    localIP  = 127.0.0.2     ; bind LAN networking to this address

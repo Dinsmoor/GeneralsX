@@ -538,18 +538,33 @@ void SpecialPowerModule::createViewObject( const Coord3D *location )
 	if( objectName.isEmpty() )
 		return;
 
-	// TheSuperHackers @fix Every link in this chain was dereferenced blind.
-	// A special power fired from a headless build crashed here: the view
-	// object exists only so a HUMAN can watch the strike, and nothing on
-	// the logic side needs it, so any missing piece must simply skip it
-	// rather than fault.
-	if( TheThingFactory == nullptr )
-		return;
-
+	// TheSuperHackers @fix Every link in this chain was dereferenced blind,
+	// and a special power fired from a headless build crashed here.
+	//
+	// BUT THE OBJECT MUST STILL BE CREATED. This is GameLogic, and
+	// ThingFactory::newObject() both draws GameLogicRandomValue() (for a
+	// template with build variations) and takes an object ID from
+	// friend_createObject(). Skipping it headless -- as an earlier version
+	// of this guard did -- desynced us from every stock client the instant
+	// any superweapon fired: the two simulations disagreed about the RNG
+	// stream and the ID sequence from that frame on, and a LAN game against
+	// retail 1.04 died with a mismatch a few minutes in.
+	//
+	// So guard only what is genuinely absent headless, and never at the
+	// cost of a logic side effect. TheThingFactory is created by
+	// GameEngine::init() in every build, headless included, so a null here
+	// is not a headless condition at all -- it would be a torn-down engine,
+	// and returning early then is the same thing stock does by crashing.
+	// What IS client-only is further down: the shroud-clearing view object
+	// exists so a human can watch the strike.
 	const ThingTemplate *viewObjectTemplate = TheThingFactory->findTemplate( objectName );
 	if( viewObjectTemplate == nullptr )
 		return;
 
+	// getDefaultTeam() is logic state and is present headless; this is the
+	// same null test stock performs implicitly by dereferencing, kept only
+	// so a missing player skips rather than faults. It must never be the
+	// reason the object is not made.
 	Player *owner = getObject()->getControllingPlayer();
 	if( owner == nullptr || owner->getDefaultTeam() == nullptr )
 		return;

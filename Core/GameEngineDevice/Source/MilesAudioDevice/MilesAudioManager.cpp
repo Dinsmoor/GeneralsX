@@ -628,6 +628,28 @@ void MilesAudioManager::playAudioEvent( AudioRequest* req )
 		return;
 	}
 
+	/*	Do not stream MUSIC that has been switched off.
+
+		AudioManager::addAudioEvent already tests isOn() per sound type,
+		but a music event can still arrive here with music off: the music
+		manager holds its own track and restarts it, and this request path
+		never re-checked. In a headless game that left the faction music
+		streaming for the whole match.
+
+		ONLY music is checked, deliberately. Sound effects and speech can
+		be LOGICAL audio (ScriptActions marks scripted ones so), and a
+		logical event's generatePlayInfo() draws
+		GameLogicRandomValueUnchanged() -- which, with RETAIL_COMPATIBLE_CRC
+		on, advances the shared logic seed. Refusing those here would be
+		refusing them only on this client, and that is a desync. Music is
+		never logical audio.
+
+		This must come BEFORE allocatePlayingAudio() below, or refusing to
+		play would leak the structure it hands out.
+	*/
+	if (info->m_soundType == AT_Music && !isOn(AudioAffect_Music))
+		return;
+
 	std::list<PlayingAudio *>::iterator it;
 	PlayingAudio *playing = nullptr;
 

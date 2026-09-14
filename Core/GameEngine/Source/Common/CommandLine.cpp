@@ -415,6 +415,35 @@ Int parseHeadless(char *args[], int num)
 	TheWritableGlobalData->m_playIntro = FALSE;
 	TheWritableGlobalData->m_playSizzle = FALSE;
 
+	/*	Silence the MUSIC, and only the music.
+
+		A headless game plays no sound effects, speech or announcements
+		already -- measured, not assumed -- but the faction music streamed
+		for the whole match. It could not be left to -noaudio: that flag,
+		and -nomusic with it, sits inside `#if defined(RTS_DEBUG)` further
+		down this file, so in any Release build -- including the
+		RTS_DEBUG_LOGGING one we use for CRC dumps -- neither exists and
+		both are silently discarded.
+
+		ONLY music is touched here, deliberately. Turning the sound and
+		speech switches off as well would risk a multiplayer mismatch:
+		ScriptActions marks scripted sound effects and speech as LOGICAL
+		audio, and AudioEventRTS::generatePlayInfo() draws
+		GameLogicRandomValueUnchanged() for a logical event -- which, with
+		RETAIL_COMPATIBLE_CRC on (it is), forwards to
+		GetGameLogicRandomValue() and ADVANCES the shared logic seed. The
+		isOn() gate in AudioManager::addAudioEvent returns before that
+		draw, so a client with sound off would skip a draw every other
+		client makes, and desync. Music is never logical audio, so gating
+		it skips no draw.
+
+		Note that -headless picking MilesAudioManagerDummy does not silence
+		anything by itself: that subclass deliberately leaves the real
+		Miles device open, because getFileLengthMS has to keep returning
+		true file lengths for script timing and the CRC.
+	*/
+	TheWritableGlobalData->m_musicOn = FALSE;
+
 	// TheSuperHackers @fix bobtista 03/02/2026 Set DX8Wrapper_IsWindowed to false in headless
 	// mode so that ignoringAsserts() works correctly throughout the entire process lifetime,
 	// including during shutdown after TheGlobalData has been destroyed.
@@ -1321,10 +1350,22 @@ static CommandLineParam paramsForEngineInit[] =
 	// TheSuperHackers @feature xezon 03/08/2025 Force full viewport for 'Control Bar Pro' Addons like GenTool did it.
 	{ "-forcefullviewport", parseFullViewport },
 
+	// TheSuperHackers @tweak Is now available in Release builds. Silencing the
+	// music is not a debugging feature, and a flag that silently does nothing
+	// in the build people actually run is worse than no flag: every headless
+	// script here passed -noaudio for months and played music regardless.
+	//
+	// -noaudio stays debug-only on purpose. It also clears the SOUND and
+	// SPEECH switches, and scripted sound effects and speech are LOGICAL
+	// audio whose generatePlayInfo() advances the shared logic seed under
+	// RETAIL_COMPATIBLE_CRC -- so silencing them on one client only would
+	// desync a network game. -nomusic touches music alone, which is never
+	// logical audio.
+	{ "-nomusic", parseNoMusic },
+
 #if defined(RTS_DEBUG)
 	{ "-noaudio", parseNoAudio },
 	{ "-map", parseMapName },
-	{ "-nomusic", parseNoMusic },
 	{ "-novideo", parseNoVideo },
 	{ "-noLogOrCrash", parseNoLogOrCrash },
 	{ "-FPUPreserve", parseFPUPreserve },

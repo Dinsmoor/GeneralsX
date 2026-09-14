@@ -142,6 +142,8 @@ public:
 	Bool m_botHostLanLobby;		///< host a plain LAN game (broadcast), not direct connect
 	AsciiString m_lobbyScript;		///< file of chat lines a bot host sends, for testing		///< map to host, as the skirmish launcher names them
 	Int m_botHostPlayers;			///< start once this many players are in the lobby (default 2)
+	AsciiString m_botHostSlots;		///< host only: per-slot contents, e.g. "open,medium,medium" for slots 1..n
+	AsciiString m_botHostTeams;		///< host only: per-slot team numbers, 1-based, "-" for none, e.g. "1,1,2,2"
 	AsciiString m_netLocalIP;		///< bind LAN networking to this address instead of the default one.
 	AsciiString m_botFaction;		///< faction the bot asks for, as a word ("China"); resolved once the template store exists
 									///< LANAPI assumes one instance per machine ("everyone has a unique

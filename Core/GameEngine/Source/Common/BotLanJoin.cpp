@@ -245,6 +245,115 @@ void say( const char *text )
 }
 
 /**
+	Split "a,b,c" into its trimmed, lower-cased pieces. Used for the host's
+	`slots` and `teams` config lines, which are both one entry per slot.
+*/
+static std::vector<std::string> splitCommaList( const AsciiString& csv )
+{
+	std::vector<std::string> out;
+	std::string cur;
+	const char *p = csv.str();
+	for (; *p != 0; ++p)
+	{
+		if (*p == ',')
+		{
+			out.push_back(cur);
+			cur.clear();
+			continue;
+		}
+		cur += (char)tolower((unsigned char)*p);
+	}
+	out.push_back(cur);
+
+	for (size_t q = 0; q < out.size(); ++q)
+	{
+		std::string& t = out[q];
+		while (!t.empty() && (t[0] == ' ' || t[0] == '\t'))
+			t.erase(0, 1);
+		while (!t.empty() && (t[t.size() - 1] == ' ' || t[t.size() - 1] == '\t'))
+			t.erase(t.size() - 1, 1);
+	}
+	return out;
+}
+
+/**
+	The slot contents a person picks from the host's player combo box, by the
+	word they would say for it. The combo's entries ARE the SlotState enum in
+	order (Open, Closed, EasyAI, MediumAI, HardAI), which is why the menu can
+	pass the selected position straight to setState().
+
+	Returns FALSE for a word we do not know, so the caller can complain with
+	the offending text rather than silently seating something else.
+*/
+static Bool slotStateFromWord( const std::string& word, SlotState *out )
+{
+	if (word == "open")                              { *out = SLOT_OPEN;      return TRUE; }
+	if (word == "closed" || word == "close")         { *out = SLOT_CLOSED;    return TRUE; }
+	if (word == "easy")                              { *out = SLOT_EASY_AI;   return TRUE; }
+	if (word == "medium" || word == "med")           { *out = SLOT_MED_AI;    return TRUE; }
+	if (word == "hard" || word == "brutal")          { *out = SLOT_BRUTAL_AI; return TRUE; }
+	return FALSE;
+}
+
+/**
+	Write the configured team numbers onto the slot list.
+
+	Teams are 1-based here, as the options menu shows them to a person, with
+	"-" (or an empty entry) meaning no team. They are stored 0-based with -1
+	for none, which is what reportMySlot prints back. Slot 0 is included:
+	the host picks its own side like anyone else.
+
+	This MUST be re-applied after anybody is seated, and that is why it is a
+	function rather than a block that runs once.
+
+	Seating a player REPLACES the whole slot. Both sides do it: the host's
+	handleRequestJoin builds a fresh `LANGameSlot newSlot` and calls
+	setSlot(player, newSlot), and the joiner's handleJoinAccept does the
+	same for its own slot. A default-constructed slot has m_teamNumber = -1,
+	so every team we had written for a still-empty slot was silently wiped
+	the moment its player arrived. The host log looked perfect -- it printed
+	the teams it had just set -- and the match then started with everybody
+	on no team, which is a free-for-all, not the 2v2 that was asked for.
+
+	`whenLabel` only says which pass is talking, so the log shows the
+	re-apply rather than looking like a duplicate.
+*/
+static void applyConfiguredTeams( LANGameInfo *game, const char *whenLabel )
+{
+	if (game == nullptr || TheGlobalData->m_botHostTeams.isEmpty())
+		return;
+
+	const std::vector<std::string> want =
+		splitCommaList(TheGlobalData->m_botHostTeams);
+	for (size_t w = 0; w < want.size() && (Int)w < MAX_SLOTS; ++w)
+	{
+		if (want[w].empty())
+			continue;
+
+		GameSlot *slot = game->getLANSlot((Int)w);
+		if (slot == nullptr)
+			continue;
+
+		if (want[w] == "-" || want[w] == "none")
+		{
+			slot->setTeamNumber(-1);
+			continue;
+		}
+		const Int team = atoi(want[w].c_str());
+		if (team < 1 || team > MAX_SLOTS)
+		{
+			printf("BotHost: teams entry %d is '%s'; teams are 1..%d"
+				" or '-' for none\n", (Int)w, want[w].c_str(), MAX_SLOTS);
+			continue;
+		}
+		slot->setTeamNumber(team - 1);
+		printf("BotHost: slot %d on team %d (%s)\n",
+			(Int)w, team, whenLabel);
+	}
+	fflush(stdout);
+}
+
+/**
 	The faction names a person would actually type, mapped to the engine's
 	player template index. "china" matches FactionChina; the side name is
 	what the templates are keyed by.
@@ -536,6 +645,28 @@ Bool startLan(UnsignedInt peerIP)
 					score = 3;					// same /24 -- same wire
 				else if ((cand & 0xffff0000) == (peerIP & 0xffff0000))
 					score = 2;					// same /16 -- plausible, not proof
+			}
+			else
+			{
+				/*	No peer to match: we are DISCOVERING, and a broadcast
+					has to leave the machine. Loopback cannot reach another
+					host, so binding to 127.x -- which is what "first
+					enumerated address" gave us -- meant the search ran
+					forever with nobody able to answer. Prefer a private
+					LAN address, take any other real one over loopback, and
+					keep loopback only as a last resort so joining a game
+					hosted on this same box still works.
+				*/
+				const UnsignedInt a = (cand >> 24) & 0xff;
+				const UnsignedInt b = (cand >> 16) & 0xff;
+				if (a == 127)
+					score = 0;					// loopback: last resort
+				else if (a == 192 && b == 168)
+					score = 3;					// home LAN
+				else if (a == 10 || (a == 172 && b >= 16 && b <= 31))
+					score = 3;					// the other private ranges
+				else
+					score = 1;					// routable: better than loopback
 			}
 			if (score > bestScore)
 			{
@@ -998,6 +1129,68 @@ Int BotLanJoin::runLanHost()
 	printf("BotHost: %d seats, slots 1..%d open\n", seats, seats - 1);
 	fflush(stdout);
 
+	/*	`slots` seats AI players, so a bot can host a 2v2 against the skirmish
+		AI with only one other machine in the lobby. One entry per slot from
+		slot 1 on; slot 0 is us. Anything not named stays as the seat loop
+		above left it.
+
+		This is the host branch of the options menu: only the host may write
+		another player's slot, and it publishes the whole list afterwards.
+		The combo box entries are the SlotState enum in order, which is why
+		the menu hands the selected position straight to setState() -- we do
+		the same thing, having turned a word into that same enum.
+
+		`players` must still count every SEAT the lobby has, humans and AI
+		alike, or the host opens fewer slots than the config describes and
+		then waits for a joiner that has nowhere to sit.
+	*/
+	Int aiSeated = 0;
+	if (!TheGlobalData->m_botHostSlots.isEmpty())
+	{
+		const std::vector<std::string> want =
+			splitCommaList(TheGlobalData->m_botHostSlots);
+		for (size_t w = 0; w < want.size(); ++w)
+		{
+			const Int slotNum = (Int)w + 1;		// slot 0 is the host
+			if (slotNum >= MAX_SLOTS)
+			{
+				printf("BotHost: slots list is longer than the %d slots a game"
+					" has; ignoring the rest\n", MAX_SLOTS);
+				break;
+			}
+			if (want[w].empty())
+				continue;
+
+			SlotState st;
+			if (!slotStateFromWord(want[w], &st))
+			{
+				printf("BotHost: slots entry %d is '%s', which I do not know;"
+					" leaving that slot alone. Use open, closed, easy,"
+					" medium or hard.\n", slotNum, want[w].c_str());
+				continue;
+			}
+
+			GameSlot *slot = game->getLANSlot(slotNum);
+			if (slot == nullptr)
+				continue;
+			slot->setState(st);
+			if (slot->isAI())
+				++aiSeated;
+			printf("BotHost: slot %d = %s\n", slotNum, want[w].c_str());
+		}
+
+		/*	Every AI takes one of the seats we opened, so a config that
+			seats as many AI as it has seats leaves nowhere for a joiner --
+			the host would start alone against them.
+		*/
+		if (aiSeated > 0 && seats - aiSeated < 2)
+			printf("BotHost: WARNING players=%d with %d AI seated leaves no"
+				" seat for a joiner; raise players to %d\n",
+				seats, aiSeated, aiSeated + 2);
+	}
+
+	applyConfiguredTeams(game, "seating");
+
 	TheLAN->RequestGameAnnounce();
 
 	// A host already owns slot 0, so it can take its faction right away --
@@ -1008,7 +1201,19 @@ Int BotLanJoin::runLanHost()
 	// Same floor as `seats` above: the two must agree, or the host opens
 	// two seats and then waits for a number of players it never sized the
 	// game for.
-	const Int wantPlayers = seats;
+	/*	How many HUMAN seats to wait for.
+
+		`present` below counts only human slots, because an AI is never
+		"present" and never accepts -- it is simply written into the slot
+		list by the host. Our own bots are human players in every sense the
+		lobby cares about: they take a SLOT_PLAYER seat, and they accept.
+
+		So the number to wait for is the seats we opened MINUS the ones we
+		filled with AI ourselves. Leaving this as `seats` meant a 2v2 against
+		two medium AIs waited for four humans, and sat in the lobby until the
+		ten-minute timeout.
+	*/
+	const Int wantPlayers = max(1, seats - aiSeated);
 	const DWORD lobbyStart = GetTickCount();
 	const DWORD lobbyTimeoutMs = 10 * 60 * 1000;
 	Bool started = FALSE;
@@ -1150,6 +1355,42 @@ Int BotLanJoin::runLanHost()
 			{
 				printf("BotHost: %d players ready, starting\n", present);
 				fflush(stdout);
+
+				/*	Re-apply the teams now that everybody is seated.
+
+					Seating REPLACES a slot wholesale -- handleRequestJoin
+					builds a fresh LANGameSlot and setSlot()s it -- and a
+					fresh slot has no team. The pass we did before opening
+					the lobby therefore only stuck for slots nobody joined,
+					which in a 2v2 meant the two AI kept their teams and
+					the two human players lost theirs. Doing it here, after
+					the last join and before the announce, is the only
+					point where the slot list is both complete and still
+					ours to change.
+				*/
+				applyConfiguredTeams(game, "start");
+
+				/*	Say what the slot list ACTUALLY holds, not what we
+					asked for. The teams bug hid behind a log that printed
+					the write rather than the result, so it read as correct
+					for a whole 30-minute match that was in fact a
+					free-for-all. Print state, not intent.
+				*/
+				for (Int sl = 0; sl < MAX_SLOTS; ++sl)
+				{
+					const GameSlot *gs = game->getConstSlot(sl);
+					if (gs == nullptr || !gs->isOccupied())
+						continue;
+					char t[16];
+					if (gs->getTeamNumber() < 0)
+						strcpy(t, "none");
+					else
+						snprintf(t, sizeof(t), "%d", gs->getTeamNumber() + 1);
+					printf("BotHost: FINAL slot %d: %s, team %s\n", sl,
+						gs->isAI() ? "AI" : "player", t);
+				}
+				fflush(stdout);
+
 				// Everyone must be marked ready or the host refuses; the
 				// bots accept as soon as they are told to, and a human
 				// clicks it. Announce first so the final slot list is out.
@@ -1182,25 +1423,95 @@ Int BotLanJoin::runLanJoin()
 {
 	s_role = ROLE_JOINER;
 
-	const AsciiString host = TheGlobalData->m_botJoinHost;
-	if (host.isEmpty())
-	{
-		printf("BotJoin: no host address\n");
-		return 1;
-	}
-
-	// JoinDirectConnectGame(): octets shifted into host byte order, which
-	// is what LANAPI works in throughout. inet_addr would give network
-	// order and silently reach the wrong machine.
+	AsciiString host = TheGlobalData->m_botJoinHost;
 	UnsignedInt hostIP = 0;
-	if (!parseIPv4(host.str(), &hostIP) || hostIP == 0)
-	{
-		printf("BotJoin: '%s' is not an address I can parse\n", host.str());
-		return 1;
-	}
 
-	if (!startLan(hostIP))
-		return 1;					// startLan already said why
+	/*	"any": find a lobby instead of being told where one is.
+
+		Direct connect needs a dotted quad, which means knowing in advance
+		which machine is hosting -- fine for a scripted test, useless when
+		somebody just opened a game and wants the bot in it. LANAPI already
+		does discovery for the game's own LAN browser: RequestLocations()
+		broadcasts, hosts answer, and the replies accumulate in the game
+		list. This waits on that list and takes the first game that has a
+		host address, which is exactly what a player does when they see one
+		entry in the browser and double-click it.
+
+		Discovery is read-only -- GetGames() walks the list LANAPI already
+		built and creates nothing.
+	*/
+	const Bool discover = host.isEmpty() ||
+		!stricmp(host.str(), "any") || !stricmp(host.str(), "auto");
+
+	if (discover)
+	{
+		// No peer to match an interface against, so LANAPI picks by its own
+		// rule (and -netlocalip still overrides). The host path does the
+		// same with startLan(0).
+		if (!startLan(0))
+			return 1;					// startLan already said why
+
+		printf("BotJoin: looking for a game on the LAN\n");
+		fflush(stdout);
+
+		const DWORD findStart = GetTickCount();
+		const DWORD findTimeoutMs = 10 * 60 * 1000;
+		DWORD lastAsk = 0;
+		Int asks = 0;
+		while (hostIP == 0)
+		{
+			if (GetTickCount() - findStart > findTimeoutMs)
+			{
+				printf("BotJoin: no game appeared on the LAN in %d minutes\n",
+					(Int)(findTimeoutMs / 60000));
+				return 1;
+			}
+			// Ask periodically: a host that starts AFTER we do must still
+			// be found, and a single broadcast at startup would miss it.
+			if (lastAsk == 0 || GetTickCount() - lastAsk > 2000)
+			{
+				lastAsk = GetTickCount();
+				++asks;
+				TheLAN->RequestLocations();
+				if (asks % 15 == 0)
+				{
+					printf("BotJoin: still looking (%d)\n", asks);
+					fflush(stdout);
+				}
+			}
+			TheLAN->update();
+			TheFramePacer->update();
+
+			for (LANGameInfo *g = TheLAN->GetGames(); g != nullptr; g = g->getNext())
+			{
+				const UnsignedInt ip = g->getIP(0);		// slot 0 is the host
+				if (ip == 0 || ip == TheLAN->GetLocalIP())
+					continue;						// no address, or ourselves
+				hostIP = ip;
+				AsciiString found;
+				found.translate(g->getName());
+				printf("BotJoin: found '%s' at %d.%d.%d.%d\n",
+					found.str(), PRINTF_IP_AS_4_INTS(hostIP));
+				fflush(stdout);
+				break;
+			}
+		}
+		host.format("%d.%d.%d.%d", PRINTF_IP_AS_4_INTS(hostIP));
+	}
+	else
+	{
+		// JoinDirectConnectGame(): octets shifted into host byte order, which
+		// is what LANAPI works in throughout. inet_addr would give network
+		// order and silently reach the wrong machine.
+		if (!parseIPv4(host.str(), &hostIP) || hostIP == 0)
+		{
+			printf("BotJoin: '%s' is not an address I can parse\n", host.str());
+			return 1;
+		}
+
+		if (!startLan(hostIP))
+			return 1;					// startLan already said why
+	}
 
 	/*	Refuse to share an address with the host.
 

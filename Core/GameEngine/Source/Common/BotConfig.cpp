@@ -177,6 +177,24 @@ Bool BotConfig::load( const AsciiString& fname )
 		gd->m_botHostPlayers = i;
 	if (getBool(prefs, "lanLobby", &b))
 		gd->m_botHostLanLobby = b;
+
+	/*	Who sits in each slot, and who is on whose side. Both are host-only:
+		only the host owns the slot list, exactly as in the options menu
+		where every other player's combo box is disabled.
+
+		Written as one comma-separated entry per slot STARTING AT SLOT 1 --
+		slot 0 is the host itself, which is this process and cannot be
+		anything else. "slots = medium,medium" therefore describes a
+		three-player game: us, and two medium AIs.
+
+		`teams` is 1-based to match what the menu shows a person; "-" means
+		no team. It covers every slot INCLUDING slot 0, because the host does
+		pick its own team.
+	*/
+	if (getString(prefs, "slots", &s))
+		gd->m_botHostSlots = s;
+	if (getString(prefs, "teams", &s))
+		gd->m_botHostTeams = s;
 	if (getString(prefs, "name", &s))
 		gd->m_botJoinName = s;
 	if (getString(prefs, "localIP", &s))
