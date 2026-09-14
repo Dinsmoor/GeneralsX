@@ -96,11 +96,19 @@ static AsciiString buildGameInfoString( const MapMetaData *md,
 		else
 		{
 			// C<E|M|B>,<color>,<template>,<startpos>,<team>
+			// 'H' for brutal, NOT 'B'. ParseAsciiStringToGameInfo switches on
+			// this letter and accepts only E, M and H -- a 'B' falls through
+			// to its default, sets optionsOk = false, and the whole setup is
+			// rejected with "could not build a valid game setup" before a
+			// single frame runs. So -skirmish with "hard" or "brutal" had
+			// never once worked: the match died at frame 0 and the bot's
+			// observation socket was reset, which reads in the logs as the
+			// bot failing rather than the game never starting.
 			char diff = 'M';
 			if (strcmp(word, "easy") == 0)
 				diff = 'E';
 			else if (strcmp(word, "brutal") == 0 || strcmp(word, "hard") == 0)
-				diff = 'B';
+				diff = 'H';
 			snprintf(chunk, sizeof(chunk), "C%c,%d,%d,%d,-1",
 				diff, slotIndex, playerTemplate, slotIndex);
 		}
