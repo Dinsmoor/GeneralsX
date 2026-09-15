@@ -816,7 +816,7 @@ void CPUDetectClass::Init_CPUID_Instruction()
    // the command (huh?)
 
 #if defined(_MSC_VER) && _MSC_VER < 1300
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN32)
    __asm
    {
       mov cpuid_available, 0	// clear flag
@@ -893,7 +893,7 @@ void CPUDetectClass::Init_Processor_Features()
 
 void CPUDetectClass::Init_Memory()
 {
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN32)
 
 #if defined(_MSC_VER) && _MSC_VER < 1300
 	MEMORYSTATUS mem;
@@ -925,7 +925,7 @@ void CPUDetectClass::Init_Memory()
 
 void CPUDetectClass::Init_OS()
 {
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN32)
 
 // TheSuperHackers @fix OmniBlade 30/07/2025
 // GetVersionEx only returns the version of Windows it was manifested for since Windows 8.
@@ -1099,7 +1099,7 @@ void CPUDetectClass::Init_Compact_Log()
 {
 	StringClass work(0,true);
 
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN32)
    TIME_ZONE_INFORMATION time_zone;
    GetTimeZoneInformation(&time_zone);
    COMPACTLOG(("%d\t", time_zone.Bias));  // get diff between local time and UTC

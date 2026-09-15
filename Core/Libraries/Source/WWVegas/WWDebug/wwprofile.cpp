@@ -76,7 +76,11 @@ unsigned WWProfile_Get_System_Time()
 
 WWINLINE double WWProfile_Get_Inv_Processor_Ticks_Per_Second()
 {
-#ifdef WIN32
+// TheSuperHackers @build WIN32 is not predefined by the compiler (_WIN32 is),
+// so this fell through to the _UNIX branch and silently returned a fixed
+// 0.001 instead of the measured CPU tick rate. It compiles either way, which
+// is what makes it worth fixing: a wrong timing constant is invisible.
+#if defined(WIN32) || defined(_WIN32)
 	return CPUDetectClass::Get_Inv_Processor_Ticks_Per_Second();
 #elif defined (_UNIX)
 	return 0.001;
