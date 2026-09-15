@@ -60,6 +60,22 @@ ActionServer *TheActionServer = nullptr;
 // stay below that; a line longer than this is malformed either way.
 static const Int MAX_PENDING = 16 * 1024;
 
+/*	AIGroup-creating messages this file may queue per LOGIC FRAME.
+
+	TWO, because that is exactly what one human action costs: a selection
+	message (MSG_CREATE_SELECTED_GROUP_NO_SOUND) followed by the order itself.
+	logicMessageDispatcher() mints a fresh AIGroup for every message in the
+	network range, so letting several orders land in one frame creates groups
+	no peer creates -- the desync captured at frame 5102, where six
+	add_waypoint messages in one frame produced twelve AIGroups on this
+	machine and none on either human's.
+
+	Not higher: raising it re-opens exactly that bug. Not lower: one would
+	split a single order from its own selection message, which changes what
+	the order applies to.
+*/
+static const Int MAX_GROUP_MSGS_PER_FRAME = 2;
+
 //-------------------------------------------------------------------------------------------------
 // Minimal JSON output.
 //
@@ -408,11 +424,38 @@ void ActionServer::receive()
 		{
 			chunk[got] = '\0';
 			m_pending->concat(chunk);
+
+			/*	A BACKLOG IS NOT A MALFORMED LINE. These were one check, and
+				conflating them is a silent-death bug.
+
+				Orders drain at ONE AIGroup-creating order per logic frame
+				(see update()), while the agent decides in bursts: measured
+				at obsInterval 5 it issued up to 89 orders in a single
+				observation against a drain of 5 per observation, so a
+				legitimate backlog can reach tens of KB. Dropping the agent
+				for that means the engine plays on with nothing driving it,
+				which looks exactly like a bot bug and cost a whole match
+				before.
+
+				So: stop READING while backlogged and let TCP apply
+				backpressure -- the agent's send() blocks or its buffer
+				fills, which is the correct signal -- and reserve dropping
+				for a single line that cannot be a real order.
+			*/
 			if (m_pending->getLength() > MAX_PENDING)
 			{
-				DEBUG_LOG(("ActionServer: order line too long, dropping agent"));
-				closesocket((SOCKET)m_clientSocket);
-				m_clientSocket = (UnsignedInt)INVALID_SOCKET;
+				const char *nl = strchr(m_pending->str(), '\n');
+				if (nl == nullptr)
+				{
+					// No newline in MAX_PENDING bytes: this is not an order.
+					DEBUG_LOG(("ActionServer: order line too long (%d bytes, no newline), dropping agent",
+						m_pending->getLength()));
+					closesocket((SOCKET)m_clientSocket);
+					m_clientSocket = (UnsignedInt)INVALID_SOCKET;
+					return;
+				}
+				// Whole orders are queued and will drain; stop reading until
+				// they do rather than growing without bound.
 				return;
 			}
 			continue;
@@ -1084,12 +1127,25 @@ void ActionServer::executeLine( const char *line )
 
 	if (strcmp(verb, "set_rally_point") == 0)
 	{
+		// ADDRESSED LIKE EVERY OTHER ORDER THAT NAMES AN OBJECT.
+		//
+		// This read only "building", but the client issues object-addressed
+		// orders as "ids":[...] -- that is what Object._order/_issue emits for
+		// every other verb. So the one caller a rally point could ever have was
+		// answered with "needs building, x and y" and the order never reached
+		// the game. Accept both: "ids" because that is the house style, and
+		// "building" because it was the published contract.
 		Int building = 0;
 		Real x = 0.0f, y = 0.0f;
-		if (!readInt(line, "building", building) ||
-				!readReal(line, "x", x) || !readReal(line, "y", y))
+		if (!readInt(line, "building", building))
 		{
-			reply("error", "set_rally_point needs building, x and y");
+			std::vector<Int> ids;
+			if (readIntArray(line, "ids", ids) && !ids.empty())
+				building = ids[0];
+		}
+		if (building == 0 || !readReal(line, "x", x) || !readReal(line, "y", y))
+		{
+			reply("error", "set_rally_point needs ids (or building), x and y");
 			return;
 		}
 
@@ -1957,6 +2013,72 @@ void ActionServer::executeLine( const char *line )
 }
 
 //-------------------------------------------------------------------------------------------------
+/*	WHY THIS PACING EXISTS: a captured multiplayer desync, 2026-09-14.
+
+	Three machines played one match with a full per-frame CRC dump running on
+	each (-DebugCRCFromFrame 0 -LogObjectCRCs -SaveDebugCRCPerFrame, and
+	-NetCRCInterval 1 so the reported frame is the real one). Two human
+	players never diverged across all 5235 frames. The machine running an
+	external agent diverged at exactly FRAME 5102, and the dump says where:
+
+	    CRC at start of frame     SAME   (the frame BEGINS in agreement)
+	    CRC after AI pathfinder   DIFF
+	    CRC after AI              DIFF
+
+	Every object's state -- position, health, matrix -- was byte-identical on
+	all three machines at 5102 and at every other frame, so this was not
+	floating point and not unit simulation. The difference was AIGroup, and it
+	was a difference of COUNT rather than value: 12 AIGroups present on the
+	agent's machine, 0 on either human's, the humans' set a strict subset.
+
+	The cause is one level above this file. GameLogic::logicMessageDispatcher()
+	(GameLogicDispatch.cpp) calls TheAI->createGroup() once for EVERY network
+	message it dispatches. Two frames before the divergence the agent had
+	queued a six-leg route, and the action server executed all six
+	add_waypoint lines in a single update() -- so six AIGroups were minted on
+	this machine and none anywhere else.
+
+	A human cannot do this. Appending waypoints is a modifier-click per
+	waypoint, at most one per frame. An agent writing to a socket can emit a
+	whole route in under a millisecond, which is why this never showed up in
+	twenty years of human play and did show up the first time a bot queued a
+	route.
+
+	Hence: hold the orders that mint groups and release ONE PER LOGIC FRAME.
+	The alternative -- batching waypoints into a single message inside the
+	engine -- would mean editing AIGroup, which upstream explicitly warns
+	against (GameDefines.h, RETAIL_COMPATIBLE_AIGROUP: "a lot wrong with
+	AIGroup, such as use-after-free, double-free, leaks, but we cannot touch
+	it much without breaking retail compatibility"). Pacing changes only WHEN
+	a line is executed; orders still go onto TheCommandList exactly as before,
+	so they stay CRC'd, networked and recorded in replays.
+
+	Full capture, dumps and analysis: dev/tmp/desync1/FINDING.md.
+*/
+
+/*	WHY THE FIRST ATTEMPT FAILED, so it is not tried again.
+
+	The first fix paced whole JSON LINES:
+
+	    // WRONG
+	    if (isPacedVerb(line)) defer(line); else executeLine(line);
+
+	Each line is TWO network messages, not one: selectObjects() appends
+	MSG_CREATE_SELECTED_GROUP_NO_SOUND to set the selection, then the order
+	follows. Both are in the network range, so the dispatcher mints an AIGroup
+	for each, and a "paced" line still emitted a pair. A 3-leg route desynced a
+	live match with that pacing in place. What follows paces ORDERS -- one
+	MESSAGES -- MAX_GROUP_MSGS_PER_FRAME, counted off the command list itself
+	-- which is exactly what a human right-click costs: one selection message
+	plus one order message, once per frame.
+
+	And it cannot live in the Python agent: that process only observes every
+	obsInterval-th frame (5 by default), so the best it could release is one
+	order per 5 frames -- wasting four in five and stretching a six-leg route to
+	30 frames. The engine is the only thing on the per-frame clock. See the note
+	in bot/link.py::send.
+*/
+
 void ActionServer::update()
 {
 	if (!m_enabled || m_pending == nullptr)
@@ -1979,8 +2101,29 @@ void ActionServer::update()
 	if (m_clientSocket == (UnsignedInt)INVALID_SOCKET)
 		return;
 
-	// Execute every complete line received so far, leaving any partial line in
-	// the buffer for the next frame.
+	// Execute the lines received so far, leaving any partial line -- AND any
+	// order beyond this frame's budget -- in the buffer for the next frame.
+	//
+	// ONE AIGroup-CREATING ORDER PER LOGIC FRAME. GameLogic's dispatcher calls
+	// TheAI->createGroup() for every network message, and one order from here
+	// is TWO of them (a selection message, then the order). Let several land
+	// in one frame and this machine mints groups no peer mints -- a desync,
+	// captured at frame 5102 on 2026-09-14 when a six-leg route went out at
+	// once. A human cannot cause it: a right-click is one selection plus one
+	// order, once per frame.
+	//
+	// The unread remainder of m_pending IS the queue, in arrival order, so
+	// this needs no second buffer and cannot reorder a route's legs. update()
+	// runs once per logic frame in both the skirmish and the network path, so
+	// a six-leg route drains over six frames -- 200ms, against legs that are
+	// seconds of travel apart.
+	//
+	// Pacing here rather than in the agent because THE AGENT CANNOT SEE EVERY
+	// FRAME: it observes every obsInterval frames (5 by default) and so could
+	// only ever release an order every 5th frame, wasting four in five and
+	// stretching that route to 30 frames. The engine is the only thing on the
+	// per-frame clock.
+	Int queuedThisFrame = 0;
 	for (;;)
 	{
 		const char *buf = m_pending->str();
@@ -1988,11 +2131,62 @@ void ActionServer::update()
 		if (nl == nullptr)
 			break;
 
+		// Budget spent: stop. The unread remainder of m_pending IS the queue,
+		// in arrival order, so this needs no second buffer and cannot reorder
+		// a route's legs.
+		if (queuedThisFrame >= MAX_GROUP_MSGS_PER_FRAME)
+			break;
+
 		std::string line(buf, nl - buf);
 		AsciiString rest = nl + 1;
 		*m_pending = rest;
 
-		if (!line.empty())
-			executeLine(line.c_str());
+		if (line.empty())
+			continue;
+
+		// COUNT WHAT WAS ACTUALLY QUEUED, rather than predicting it from the
+		// JSON. Every message in the network range mints an AIGroup, and a
+		// single line can append one (a bare order), two (selection + order),
+		// or none at all (an inline query answered from the reply socket).
+		// Guessing that from the line's shape is what left eight verbs
+		// unpaced; the command list knows exactly.
+		const Int before = countCommands();
+		executeLine(line.c_str());
+		const Int added = countCommands() - before;
+		if (added > 0)
+			queuedThisFrame += added;
 	}
+}
+
+/**
+ * How many messages are on the command list right now.
+ *
+ * This is how the budget in update() learns what an order actually cost:
+ * ASKED AFTER THE FACT, NOT GUESSED BEFORE IT. An earlier version tested the
+ * JSON structurally -- "does the line carry an ids array?" -- and that left
+ * the desync partly unfixed, because build_structure, build_unit, upgrade,
+ * build_wall, exit_unit, set_rally_point, purchase_science and special_power
+ * address their target with "producer"/"dozer"/"building" rather than "ids".
+ * Every one of them went unpaced, and most send TWO messages (a hand-built
+ * selection, then the order), so each minted two AIGroups outside the budget.
+ *
+ * logicMessageDispatcher() calls TheAI->createGroup() for EVERY message in the
+ * network range -- the only exclusions are MSG_LOGIC_CRC and
+ * MSG_SET_REPLAY_CAMERA -- so the honest question is just "how many messages
+ * did that line put on TheCommandList?", which this answers exactly.
+ *
+ * The list is short by construction -- one logic frame's worth of input, which
+ * for a human is a handful -- so walking it is cheaper than threading a
+ * counter through every append site in the engine.
+ */
+Int ActionServer::countCommands()
+{
+	if (TheCommandList == nullptr)
+		return 0;
+
+	Int n = 0;
+	for (const GameMessage *m = TheCommandList->getFirstMessage(); m != nullptr;
+			m = m->next())
+		++n;
+	return n;
 }

@@ -68,6 +68,13 @@ private:
 	*/
 	GameMessage *beginMessage( GameMessage::Type type );
 
+	/**
+		How many messages are queued on TheCommandList right now. update()
+		charges the difference across executeLine() against this frame's
+		AIGroup budget -- see the pacing note there.
+	*/
+	static Int countCommands();
+
 	/// Select exactly the given objects, so the following command applies to them.
 	Bool selectObjects( const char *json );
 
