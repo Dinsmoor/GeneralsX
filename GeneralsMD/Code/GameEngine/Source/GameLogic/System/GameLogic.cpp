@@ -406,6 +406,8 @@ void GameLogic::init()
 		TheObservationServer = NEW ObservationServer;
 		TheObservationServer->init(TheGlobalData->m_observationPort,
 															 TheGlobalData->m_observationInterval);
+		if (TheGlobalData->m_observationDelta != 0)
+			TheObservationServer->setDelta(TRUE, TheGlobalData->m_observationDelta);
 	}
 
 	// Optional order channel for external agents; disabled unless a port was
