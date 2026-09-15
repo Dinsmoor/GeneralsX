@@ -216,6 +216,15 @@ Bool BotConfig::load( const AsciiString& fname )
 		gd->m_observationInterval = (UnsignedInt)i;
 	if (getInt(prefs, "obsPlayer", &i))
 		gd->m_observationPlayer = i;
+	/*	obsDelta N: send changed fields only, with a full keyframe every N
+		observations. The multiplayer path reaches the engine ONLY through
+		this file -- bot-join-mp.sh builds it and passes -botconfig -- so
+		without this key the command-line -obsdelta could never apply to a
+		real network match, which is exactly where the volume matters most.
+		See docs/OBS_PROTOCOL.md.
+	*/
+	if (getInt(prefs, "obsDelta", &i))
+		gd->m_observationDelta = (UnsignedInt)(i > 0 ? i : 0);
 	if (getInt(prefs, "actPort", &i))
 		gd->m_actionPort = (UnsignedShort)i;
 	if (getInt(prefs, "actPlayer", &i))

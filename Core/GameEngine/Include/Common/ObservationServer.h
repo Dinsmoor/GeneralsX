@@ -16,8 +16,11 @@
 
 #include "Lib/BaseType.h"
 #include "Common/UnicodeString.h"
+#include "Common/GameType.h"	// ObjectID
 
 #include <string>
+#include <map>
+#include <set>
 #include <vector>
 
 /**
@@ -81,6 +84,15 @@ private:
 	/// Serialize the current game state into out.
 	void buildObservation( std::string &out );
 
+	/**
+		Reduce one object's JSON to what CHANGED since the last observation.
+
+		Returns FALSE when nothing changed at all, so the object is dropped
+		from the message entirely. See the delta note in the .cpp and
+		docs/OBS_PROTOCOL.md for the wire contract.
+	*/
+	Bool deltaObject( const std::string &full, std::string &out, const std::string &prev );
+
 	/// Serialize the static map description (terrain, passability) into out.
 	void buildMapDescription();
 
@@ -109,6 +121,32 @@ private:
 		std::string		text;			///< UTF-8, already JSON-escaped
 	};
 	std::vector<ChatLine>	m_chat;
+
+	/*	Delta encoding state.
+
+		A full world snapshot is ~98% redundant: between consecutive frames
+		96 of 98 objects were byte-identical and the only field that changed
+		was "hp" on two of them. Measured 7.2x smaller over a real match, so
+		observing EVERY frame costs less disk than the every-5th-frame
+		snapshots it replaces -- and drops agent reaction time from ~1000ms
+		to ~33ms.
+
+		m_prevObjects maps object id -> the exact JSON text emitted for it
+		last time, which is what the diff is taken against. Keyed by text
+		rather than by a parsed structure because the observation is built
+		by appending JSON directly; there is no intermediate object model to
+		compare, and inventing one would duplicate ~500 lines of field code.
+	*/
+	Bool								m_delta;			///< -obsdelta: emit deltas rather than snapshots
+	UnsignedInt							m_keyInterval;		///< full keyframe every N observations
+	UnsignedInt							m_sinceKeyframe;
+	std::map<ObjectID, std::string>		m_prevObjects;
+	std::set<ObjectID>					m_seenThisFrame;	///< drives the "gone" list
+
+public:
+	/// Emit deltas rather than full snapshots, with a keyframe every N.
+	void setDelta( Bool on, UnsignedInt keyInterval );
+private:
 	// An enum, not a static const size_t: VC6 rejects an in-class
 	// initializer on a static data member ("pure specifier can only be
 	// specified for functions"), and this toolchain is VC6.

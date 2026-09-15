@@ -662,6 +662,7 @@ GlobalData::GlobalData()
 	m_checkForUpdates = TRUE;
 	m_observationPort = 0;
 	m_observationInterval = 1;
+	m_observationDelta = 0;		// full snapshots unless -obsdelta says otherwise
 	m_observationUnitsOnly = FALSE;
 	m_observationPlayer = -1;
 	m_observationDebug = FALSE;

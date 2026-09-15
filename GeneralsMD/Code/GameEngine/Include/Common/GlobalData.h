@@ -127,6 +127,7 @@ public:
 	Bool m_headless;
 	UnsignedShort m_observationPort;		///< TCP port for the observation server, 0 to disable
 	UnsignedInt m_observationInterval;	///< emit an observation every Nth logic frame
+	UnsignedInt m_observationDelta;		///< -obsdelta N: send changed fields only, full keyframe every N observations (0 = full snapshots)
 	Bool m_observationUnitsOnly;			///< omit map scenery from observations
 	Int m_observationPlayer;				///< player index whose view to report, -1 for omniscient
 	Bool m_observationDebug;				///< append every player's economy to observations (diagnostics only)

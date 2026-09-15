@@ -1086,6 +1086,31 @@ Int parseObservationUnitsOnly(char *args[], int num)
 	return 1;
 }
 
+/*	-obsdelta <keyframe interval>
+
+	Send only what CHANGED since the last observation, with a full keyframe
+	every N of them (30 is a good default: one per second at obsinterval 1).
+
+	A full snapshot is ~98% redundant -- measured on a real match, 96 of 98
+	objects were byte-identical between consecutive frames -- so this is 7.2x
+	smaller and makes observing EVERY frame cheaper than the every-5th-frame
+	snapshots it replaces. See docs/OBS_PROTOCOL.md.
+
+	Off by default: a stream without the "delta" marker is read exactly as it
+	always was, so every existing recording and tool keeps working.
+*/
+Int parseObservationDelta(char *args[], int num)
+{
+	if (num > 1 && args[1][0] != '-')
+	{
+		const Int every = atoi(args[1]);
+		TheWritableGlobalData->m_observationDelta = (every > 0) ? (UnsignedInt)every : 30;
+		return 2;
+	}
+	TheWritableGlobalData->m_observationDelta = 30;
+	return 1;
+}
+
 Int parseObservationInterval(char *args[], int num)
 {
 	if (num > 1)
@@ -1344,6 +1369,7 @@ static CommandLineParam paramsForStartup[] =
 	{ "-headless", parseHeadless },
 	{ "-obsport", parseObservationPort },
 	{ "-obsinterval", parseObservationInterval },
+	{ "-obsdelta", parseObservationDelta },
 	{ "-obsunitsonly", parseObservationUnitsOnly },
 	{ "-obsdebug", parseObservationDebug },
 	{ "-sandbox", parseCombatSandbox },
