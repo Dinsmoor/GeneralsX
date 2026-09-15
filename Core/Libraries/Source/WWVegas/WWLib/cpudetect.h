@@ -41,7 +41,14 @@
 #include "always.h"
 #include "wwstring.h"
 
-#ifdef WIN32
+// TheSuperHackers @build WIN32 (no underscore) is not predefined by the
+// compiler -- VC6 predefines _WIN32 -- so this typedef only appeared when some
+// earlier header happened to define WIN32 first. In builds with DEBUG_LOGGING
+// on, the include order shifts and nothing does, leaving sint64 undeclared:
+// "error C2146: missing ';' before identifier Get_Processor_Ticks_Per_Second".
+// That made the DEBUG_CRC configuration -- the one needed for the multiplayer
+// desync dump -- unbuildable. Test _WIN32 too, which is always there.
+#if defined(WIN32) || defined(_WIN32)
 typedef signed __int64 sint64;
 #elif defined (_UNIX)
 typedef signed long long sint64;

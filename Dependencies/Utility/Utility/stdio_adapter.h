@@ -24,6 +24,33 @@
 
 #include <stdarg.h>
 
+// TheSuperHackers @build STLport's <cstdio> defines an identical global
+// inline vsnprintf (stlport/cstdio:49, under _STLP_MSVC) with no guard of its
+// own, so a translation unit that includes both fails with
+// "error C2084: function vsnprintf already has a body". That pairing only
+// happens in builds where DEBUG_LOGGING pulls <cstdio> into the WWVegas
+// libraries -- which is exactly the configuration needed for DEBUG_CRC and
+// the multiplayer desync dump, so those 25 files could not be built at all.
+// _STLP_CSTDIO is <cstdio>'s own include guard: if it is set, STLport has
+// already supplied the function and ours must stand down. STLport's version
+// forwards straight to _vsnprintf and so does NOT null-terminate when the
+// output exactly fills the buffer; that difference is the reason this adapter
+// exists. Under STLport that fix is therefore not in effect -- callers here
+// must not rely on a null terminator when the output exactly fills the buffer.
+//
+// Include STLport's <cstdio> up front so the ordering is decided here rather
+// than by whichever translation unit got there first. Without this the guard
+// below only worked one way round: a file that reached <cstdio> first
+// compiled, and one that reached this header first (e.g. FTP.cpp via
+// WWDownload/ftp.h) made STLport's copy at cstdio:50 the redefinition
+// instead. Under USING_STLPORT the build's include path puts STLport ahead of
+// the VC98 headers, so this resolves to STLport's.
+#if defined(USING_STLPORT)
+#include <cstdio>
+#endif
+
+#if !defined(_STLP_CSTDIO)
+
 inline int vsnprintf(char* _Buffer, size_t _BufferCount, const char* _Format, va_list _ArgList)
 {
 	if (_BufferCount == 0)
@@ -38,6 +65,8 @@ inline int vsnprintf(char* _Buffer, size_t _BufferCount, const char* _Format, va
 	}
 	return result;
 }
+
+#endif // !_STLP_CSTDIO
 
 // Yes, this is called vswprintf instead of vsnwprintf
 inline int vswprintf(wchar_t* _Buffer, size_t _BufferCount, const wchar_t* _Format, va_list _ArgList)
