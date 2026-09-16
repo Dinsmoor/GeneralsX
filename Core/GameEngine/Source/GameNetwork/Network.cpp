@@ -372,6 +372,17 @@ void Network::setSawCRCMismatch()
 
 	TheRecorder->logCRCMismatch();
 
+	/*	THE EVIDENCE, WRITTEN EXACTLY ONCE.
+
+		In ring mode nothing has been written to disk all match; the last
+		-CRCRingFrames frames are sitting in memory. This is the moment they
+		become worth keeping -- the frames either side of the divergence --
+		so flush them now. A no-op unless -CRCRingFrames was given.
+	*/
+#ifdef DEBUG_CRC
+	outputCRCRing("CRC mismatch");
+#endif
+
 	// dump GameLogic random seed
 	DEBUG_LOG(("Latest frame for mismatch = %d GameLogic frame = %d",
 		TheGameLogic->getFrame()-m_runAhead-1, TheGameLogic->getFrame()));
