@@ -270,6 +270,8 @@ ActionServer::ActionServer()
 	m_listenSocket = (UnsignedInt)INVALID_SOCKET;
 	m_clientSocket = (UnsignedInt)INVALID_SOCKET;
 	m_pending = nullptr;
+	m_budgetFrame = 0;
+	m_queuedThisFrame = 0;
 }
 
 ActionServer::~ActionServer()
@@ -2113,17 +2115,39 @@ void ActionServer::update()
 	// order, once per frame.
 	//
 	// The unread remainder of m_pending IS the queue, in arrival order, so
-	// this needs no second buffer and cannot reorder a route's legs. update()
-	// runs once per logic frame in both the skirmish and the network path, so
-	// a six-leg route drains over six frames -- 200ms, against legs that are
-	// seconds of travel apart.
+	// this needs no second buffer and cannot reorder a route's legs. A
+	// six-leg route drains over six LOGIC frames -- 200ms, against legs that
+	// are seconds of travel apart.
+	//
+	// THE BUDGET IS KEYED TO THE LOGIC FRAME, NOT TO THIS CALL. update() runs
+	// once per iteration of GameEngine::execute()'s main loop, which is NOT
+	// once per logic frame. In a network game canUpdateGameLogic() ignores the
+	// frame pacer entirely and returns TheNetwork->isFrameDataReady()
+	// (GameEngine.cpp), which Network::update() sets TRUE only when
+	// timeForNewFrame() says the wall clock has reached m_nextFrameTime -- 30
+	// times a second. Every other iteration of the loop still calls this
+	// function with the logic frame unchanged. On a -noFPSLimit headless
+	// client FramePacer::update() never sleeps (the limit is
+	// UncappedFpsValue = 1000000, so FrameRateLimit::wait() returns at once),
+	// so that is THOUSANDS of calls between two logic frames. A budget held in
+	// a local reset to 0 on every call is therefore no budget at all on the
+	// machine that needs it most -- which is why the first version of this fix
+	// paced nothing on the bot and the desync came back.
 	//
 	// Pacing here rather than in the agent because THE AGENT CANNOT SEE EVERY
 	// FRAME: it observes every obsInterval frames (5 by default) and so could
 	// only ever release an order every 5th frame, wasting four in five and
 	// stretching that route to 30 frames. The engine is the only thing on the
 	// per-frame clock.
-	Int queuedThisFrame = 0;
+	// Start a new budget when the logic frame has moved on; otherwise carry
+	// what is left of this frame's.
+	const UnsignedInt logicFrame = TheGameLogic->getFrame();
+	if (logicFrame != m_budgetFrame)
+	{
+		m_budgetFrame = logicFrame;
+		m_queuedThisFrame = 0;
+	}
+
 	for (;;)
 	{
 		const char *buf = m_pending->str();
@@ -2134,7 +2158,7 @@ void ActionServer::update()
 		// Budget spent: stop. The unread remainder of m_pending IS the queue,
 		// in arrival order, so this needs no second buffer and cannot reorder
 		// a route's legs.
-		if (queuedThisFrame >= MAX_GROUP_MSGS_PER_FRAME)
+		if (m_queuedThisFrame >= MAX_GROUP_MSGS_PER_FRAME)
 			break;
 
 		std::string line(buf, nl - buf);
@@ -2154,7 +2178,7 @@ void ActionServer::update()
 		executeLine(line.c_str());
 		const Int added = countCommands() - before;
 		if (added > 0)
-			queuedThisFrame += added;
+			m_queuedThisFrame += added;
 	}
 }
 
@@ -2175,9 +2199,13 @@ void ActionServer::update()
  * MSG_SET_REPLAY_CAMERA -- so the honest question is just "how many messages
  * did that line put on TheCommandList?", which this answers exactly.
  *
- * The list is short by construction -- one logic frame's worth of input, which
- * for a human is a handful -- so walking it is cheaper than threading a
- * counter through every append site in the engine.
+ * The list is short by construction: Network::update() drains it via
+ * GetCommandsFromCommandList() on every iteration of the main loop, right
+ * after this server runs, so what is on it here is at most what the budget
+ * above allows through in one logic frame. Walking it is cheaper than
+ * threading a counter through every append site in the engine. Note the
+ * count is only ever used as a DIFFERENCE across one executeLine(), so the
+ * drain between calls cannot skew it.
  */
 Int ActionServer::countCommands()
 {
