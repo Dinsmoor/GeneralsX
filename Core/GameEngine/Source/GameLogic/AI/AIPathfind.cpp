@@ -7128,6 +7128,34 @@ struct GroundCellsStruct
 }
 
 /**
+ * findGroundPath() for a caller that is only ASKING -- see the comment on the
+ * declaration in AIPathfind.h.
+ *
+ * Pathfinder::crc() checksums m_cumulativeCellsAllocated and m_isTunneling,
+ * and a search writes both: cleanOpenAndClosedLists() adds the cells it
+ * examined to the first, findGroundPath() clears the second. A machine that
+ * answers a query its peers never asked would therefore compute a different
+ * logic CRC and desync. Snapshot both and put them back.
+ *
+ * Restoring rather than skipping keeps the ANSWER identical to what the real
+ * path search would give -- the query is still a true ground path, it just
+ * leaves no trace in CRC-bearing state.
+ */
+Path *Pathfinder::findGroundPathForQuery( const Coord3D *from,
+													 const Coord3D *to, Int pathDiameter, Bool crusher )
+{
+	const Int savedCells = m_cumulativeCellsAllocated;
+	const Bool savedTunneling = m_isTunneling;
+
+	Path *path = findGroundPath(from, to, pathDiameter, crusher);
+
+	m_cumulativeCellsAllocated = savedCells;
+	m_isTunneling = savedTunneling;
+
+	return path;
+}
+
+/**
  * Find a short, valid path between given locations.
  * Uses A* algorithm.
  */

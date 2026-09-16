@@ -1950,7 +1950,18 @@ void ActionServer::executeLine( const char *line )
 		// logic uses to route a formation. It is a ground route two cells wide,
 		// which is what tanks and infantry actually walk; an aircraft never
 		// needs the question answered.
-		Path *path = TheAI->pathfinder()->findGroundPath(&from, &to, 2, FALSE);
+		//
+		// ...ForQuery, NOT findGroundPath() itself. A path search writes
+		// m_cumulativeCellsAllocated and m_isTunneling, and BOTH are in
+		// Pathfinder::crc(), so asking this question on one machine and not
+		// the others desyncs the game. That is the mismatch captured at frame
+		// 16428 on 2026-09-15: the agent asked path_query at 16425 to stagger
+		// a team's departure and the pathfinder CRC diverged three frames
+		// later on this machine alone, with every object, the partition
+		// manager and the player list still byte-identical. A QUERY MUST NOT
+		// MOVE CRC-BEARING STATE -- if another read-only verb ever needs the
+		// pathfinder, give it the same treatment.
+		Path *path = TheAI->pathfinder()->findGroundPathForQuery(&from, &to, 2, FALSE);
 		if (path == nullptr)
 		{
 			reply("no", "no_path");
