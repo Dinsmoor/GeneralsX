@@ -65,6 +65,8 @@
 	void dumpReal(Real r, AsciiString name, AsciiString fname, Int line);
 
 	void outputCRCDebugLines();
+	/// Write the last -CRCRingFrames frames; called on a CRC mismatch only.
+	void outputCRCRing( const char *why );
 	void CRCDebugStartNewGame();
 	void outputCRCDumpLines();
 
@@ -96,6 +98,9 @@
 	extern Bool g_crcModuleDataFromLogic;
 
 	extern Bool g_keepCRCSaves;
+	extern Int g_crcRingFrames;
+	extern Int g_crcRingLines;	///< -CRCRingLines N: ring capacity in lines
+	extern Int g_crcRingTestFrame;	///< -CRCRingTestFrame N: fake a mismatch at frame N (testing only)		///< >0: buffer this many frames, write only on a mismatch
 	extern Bool g_saveDebugCRCPerFrame;
 	extern AsciiString g_saveDebugCRCPerFrameDir;
 

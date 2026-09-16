@@ -317,6 +317,57 @@ Int parseLogObjectCRCs(char *args[], int argc)
 
 //=============================================================================
 //=============================================================================
+/*	RING MODE: keep the last N frames in memory, write them only on a mismatch.
+
+	The per-frame dump (-SaveDebugCRCPerFrame alone) costs ~21 MB/s written
+	synchronously inside the game loop, which makes a live multiplayer match
+	unplayable and perturbs the timing being measured. These three flags turn
+	the same buffer into a ring that costs nothing until Network::
+	setSawCRCMismatch() flushes it. -SaveDebugCRCPerFrame still names the
+	output directory.
+*/
+Int parseCRCRingFrames(char *args[], int argc)
+{
+#ifdef DEBUG_CRC
+	if (argc > 1)
+	{
+		g_crcRingFrames = atoi(args[1]);
+	}
+#endif
+	return 2;
+}
+
+//=============================================================================
+//=============================================================================
+Int parseCRCRingLines(char *args[], int argc)
+{
+#ifdef DEBUG_CRC
+	if (argc > 1)
+	{
+		g_crcRingLines = atoi(args[1]);
+	}
+#endif
+	return 2;
+}
+
+//=============================================================================
+//=============================================================================
+/*	Fake a mismatch at a given frame, so the ring's WRITE PATH can be verified
+	in a headless skirmish instead of by hoping a real match desyncs.
+*/
+Int parseCRCRingTestFrame(char *args[], int argc)
+{
+#ifdef DEBUG_CRC
+	if (argc > 1)
+	{
+		g_crcRingTestFrame = atoi(args[1]);
+	}
+#endif
+	return 2;
+}
+
+//=============================================================================
+//=============================================================================
 Int parseNetCRCInterval(char *args[], int argc)
 {
 #if defined(DEBUG_CRC) && !RETAIL_COMPATIBLE_NETWORKING
@@ -1499,6 +1550,9 @@ static CommandLineParam paramsForEngineInit[] =
 	// Number of frames between each CRC check between all players in multiplayer games
 	// (if not all crcs are equal, mismatch occurs).
 	{ "-NetCRCInterval", parseNetCRCInterval },
+	{ "-CRCRingFrames", parseCRCRingFrames },
+	{ "-CRCRingLines", parseCRCRingLines },
+	{ "-CRCRingTestFrame", parseCRCRingTestFrame },
 
 	// Number of frames between each CRC that is written to replay files in singleplayer games.
 	{ "-ReplayCRCInterval", parseReplayCRCInterval },
