@@ -678,6 +678,33 @@ public:
 	Path *findGroundPath( const Coord3D *from, const Coord3D *to, Int pathRadius,
 		Bool crusher);	///< Find a short, valid path of the desired width on the ground.
 
+	/**
+		findGroundPath() for a caller that is only ASKING, and must not perturb
+		the simulation by asking.
+
+		A path search is not read-only: it runs the A* machinery, and
+		cleanOpenAndClosedLists() adds the cells it examined to
+		m_cumulativeCellsAllocated while findGroundPath() itself clears
+		m_isTunneling. BOTH OF THOSE ARE IN Pathfinder::crc(), so a query
+		issued on one machine and not the others changes that machine's
+		logic CRC and desyncs the game.
+
+		That is not hypothetical: it is the multiplayer mismatch captured at
+		frame 16428 on 2026-09-15. An external agent asked path_query at frame
+		16425 to stagger a team's departure, and three frames later the
+		pathfinder CRC diverged on that machine alone -- every object, the
+		partition manager and the player list still byte-identical. The
+		engine's own VERIFY_CRC guard in GameEngine::update() had already
+		flagged it as "GameLogic changed outside of GameLogic::update()".
+
+		So snapshot the two CRC-bearing fields and put them back. The search
+		itself is unchanged, and the returned Path still belongs to the caller
+		to delete. Use this for anything that answers a question rather than
+		issuing an order.
+	*/
+	Path *findGroundPathForQuery( const Coord3D *from, const Coord3D *to,
+		Int pathRadius, Bool crusher );
+
 	void addObjectToPathfindMap( class Object *obj );				///< Classify the given object's cells in the map
 	void removeObjectFromPathfindMap( class Object *obj );	///< De-classify the given object's cells in the map
 
