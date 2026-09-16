@@ -86,6 +86,15 @@ private:
 	UnsignedInt		m_clientSocket;			///< SOCKET, or invalid when idle
 	class AsciiString*	m_pending;			///< partial line carried between frames
 
+	/*
+		The AIGroup budget, carried ACROSS calls because update() is called
+		once per iteration of the main loop, NOT once per logic frame. See the
+		pacing note in update() -- these two members are the whole reason the
+		budget is honest.
+	*/
+	UnsignedInt		m_budgetFrame;			///< the logic frame m_queuedThisFrame belongs to
+	Int				m_queuedThisFrame;		///< AIGroup-minting messages queued during m_budgetFrame
+
 };
 
 extern ActionServer *TheActionServer;	///< singleton instance
