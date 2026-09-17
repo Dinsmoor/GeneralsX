@@ -465,40 +465,55 @@ namespace
 			}
 			m_lastFrame = frame;
 
-			while (m_cursor < m_labels.size() && m_labels[m_cursor].frame < frame)
-				++m_cursor;
-
-			for (size_t i = m_cursor; i < m_labels.size(); ++i)
+			// Advance to this frame, remembering each unit's CURRENT label.
+			// m_shown is what the bot said the unit was doing as of now --
+			// whether or not anything is drawn for it.
+			while (m_cursor < m_labels.size() && m_labels[m_cursor].frame <= frame)
 			{
-				if (m_labels[i].frame != frame)
-					break;
-				Object *obj = TheGameLogic->findObjectByID((ObjectID)m_labels[i].objectID);
-				if (obj == nullptr)
-					continue;
-				Drawable *draw = obj->getDrawable();
+				m_shown[m_labels[m_cursor].objectID] = m_labels[m_cursor].text;
+				++m_cursor;
+			}
+
+			// ONLY THE UNITS YOU ARE LOOKING AT. Tyler: "A screenfull of units
+			// will show too many labels and I can't see anything. I would
+			// like the behavior of the label to only show if I mouse over or
+			// select units in the replay." So a caption is drawn on a unit
+			// that is selected or under the cursor, and cleared the moment
+			// it is neither. The label is still the unit's CURRENT state --
+			// the walk above keeps every unit's label up to date, so a unit
+			// picked mid-match shows what it is doing now, not what it did
+			// when it was last picked.
+			const DrawableID hover = TheInGameUI ? TheInGameUI->getMousedOverDrawableID()
+			                                     : INVALID_DRAWABLE_ID;
+			for (std::map<Int, AsciiString>::iterator it = m_shown.begin();
+			     it != m_shown.end(); ++it)
+			{
+				Object *obj = TheGameLogic->findObjectByID((ObjectID)it->first);
+				Drawable *draw = obj ? obj->getDrawable() : nullptr;
 				if (draw == nullptr)
+				{
+					m_displayed.erase(it->first);
 					continue;
-
-				// A CAPTION on the drawable, not floating text.
-				//
-				// addFloatingText is built for damage numbers: each call
-				// allocates one more, drifts it upward and fades it out. Used
-				// for a state label it produced an ascending smear of
-				// thousands of allocations a second and nothing readable. A
-				// caption is persistent, anchored to the unit, and replaced
-				// rather than stacked -- which is what "what is this unit
-				// doing" actually needs.
-				//
-				// Only when the text CHANGES, so the caption is not rebuilt
-				// every sample; and a change is the interesting event anyway.
-				std::map<Int, AsciiString>::iterator prev =
-					m_shown.find(m_labels[i].objectID);
-				if (prev != m_shown.end() && prev->second == m_labels[i].text)
+				}
+				const Bool want = draw->isSelected() || draw->getID() == hover;
+				std::map<Int, AsciiString>::iterator shown = m_displayed.find(it->first);
+				if (!want)
+				{
+					if (shown != m_displayed.end())
+					{
+						draw->clearCaptionText();
+						m_displayed.erase(shown);
+					}
 					continue;
-				m_shown[m_labels[i].objectID] = m_labels[i].text;
-
+				}
+				// A CAPTION on the drawable, not floating text: persistent,
+				// anchored to the unit, replaced rather than stacked -- and
+				// only rebuilt when the text changes.
+				if (shown != m_displayed.end() && shown->second == it->second)
+					continue;
+				m_displayed[it->first] = it->second;
 				UnicodeString wide;
-				wide.translate(m_labels[i].text);
+				wide.translate(it->second);
 				draw->setCaptionText(wide);
 			}
 		}
@@ -516,14 +531,40 @@ namespace
 				DEBUG_LOG(("BOT_STATES: cannot open %s\n", path));
 				return;
 			}
+			// LABEL CHANGES ONLY, AND NOT WITHOUT LIMIT. The bot writes one
+			// row per unit per tick: a 30-minute match with 170 units is
+			// 292,000 rows (tmp/fe7, 72 MB), and loading every one of them
+			// crashed playback ~30 s in with an access violation inside a
+			// std::map walk on a garbage node pointer (2026-09-16). draw()
+			// only acts when a unit's label changes, so the other 96% of
+			// rows carried nothing. Skip a row that repeats the unit's last
+			// label, and stop at MAX_LABELS rather than fall over.
+			std::map<Int, AsciiString> last;
+			Int rows = 0, skipped = 0;
 			char line[1024];
 			while (fgets(line, sizeof(line), fp) != nullptr)
 			{
+				++rows;
 				BotStateLabel lab;
-				if (parse(line, lab))
-					m_labels.push_back(lab);
+				if (!parse(line, lab))
+					continue;
+				std::map<Int, AsciiString>::iterator prev = last.find(lab.objectID);
+				if (prev != last.end() && prev->second == lab.text)
+				{
+					++skipped;
+					continue;
+				}
+				last[lab.objectID] = lab.text;
+				if (m_labels.size() >= MAX_LABELS)
+				{
+					DEBUG_LOG(("BOT_STATES: more than %d label changes, the rest are dropped\n",
+						(Int)MAX_LABELS));
+					break;
+				}
+				m_labels.push_back(lab);
 			}
 			fclose(fp);
+			DEBUG_LOG(("BOT_STATES: %d rows, %d repeats skipped\n", rows, skipped));
 			// The bot writes in frame order, but a sort makes the forward
 			// walk above safe whatever produced the file.
 			std::stable_sort(m_labels.begin(), m_labels.end(), byFrame);
@@ -602,11 +643,18 @@ namespace
 			return TRUE;
 		}
 
+		//: Label changes kept in memory, at most. 292,000 raw rows brought
+		//: the engine down; the fe7 match had 10,711 changes.
+		enum { MAX_LABELS = 200000 };
+
 		Bool                        m_loaded;
 		std::vector<BotStateLabel>  m_labels;
-		//: What each unit's caption currently says, so it is set on change
-		//: rather than every sample.
+		//: Each unit's CURRENT label as of the frame being drawn, drawn or not.
 		std::map<Int, AsciiString>  m_shown;
+		//: The captions actually set on drawables right now -- only the
+		//: selected or hovered units -- so they are cleared when the unit
+		//: stops being either, and rebuilt only when the text changes.
+		std::map<Int, AsciiString>  m_displayed;
 		size_t                      m_cursor;
 		UnsignedInt                 m_lastFrame;
 	};
