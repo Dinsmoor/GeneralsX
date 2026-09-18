@@ -431,7 +431,14 @@ public:
 	m_emissionVolume;														///< the dimensions of the emission volume
 
 	Bool m_isEmissionVolumeHollow;							///< if true, only create particles at boundary of volume
-	Bool m_isGroundAligned;											///< if true, align with the ground. if false, then do the normal billboarding.
+
+	enum ParticleAlignmentType CPP_11(: Int)
+	{
+		PARTICLE_ALIGNMENT_BILLBOARD = 0,
+		PARTICLE_ALIGNMENT_XYPLANAR,
+		PARTICLE_ALIGNMENT_TYPE_COUNT
+	};
+	ParticleAlignmentType m_particleAlignment;		///< align particles toward the camera or with the XY plane.
 	Bool m_isEmitAboveGroundOnly;								///< if true, only emit particles when the system is above ground.
 	Bool m_isParticleUpTowardsEmitter;					///< if true, align the up direction to be towards the emitter.
 
@@ -495,6 +502,12 @@ static const char *const ParticlePriorityNames[] =
 };
 static_assert(ARRAY_SIZE(ParticlePriorityNames) == NUM_PARTICLE_PRIORITIES + 1, "Incorrect array size");
 
+static const char *const GroundAlignmentTypeNames[] =
+{
+	"No", "Yes", nullptr
+};
+static_assert(ARRAY_SIZE(GroundAlignmentTypeNames) == ParticleSystemInfo::PARTICLE_ALIGNMENT_TYPE_COUNT + 1, "Incorrect array size");
+
 static const char *const WindMotionNames[] =
 {
 	"NONE", "Unused", "PingPong", "Circular", nullptr
@@ -515,7 +528,7 @@ public:
 
 	void validate();
 
-	AsciiString getName() const { return m_name; }
+	const AsciiString& getName() const { return m_name; }
 
 	// This function was made const because of update modules' module data being all const.
 	ParticleSystem *createSlaveSystem( Bool createSlaves = TRUE ) const ;					///< if returns non-null, it is a slave system for use
@@ -607,15 +620,16 @@ public:
 	void setInitialDelay( UnsignedInt delay ) { m_delayLeft = delay; }
 
 	const AsciiString& getParticleTypeName() const { return m_particleTypeName; }	///< return the name of the particles
-	const Bool isUsingDrawables() const { return m_particleType == DRAWABLE; }
-	const Bool isUsingStreak() const { return m_particleType == STREAK; }
-	const Bool isUsingSmudge() const { return m_particleType == SMUDGE; }
-	const Bool isUsingVolumeParticles() const { return m_particleType == VOLUME_PARTICLE; }
-	const UnsignedInt getVolumeParticleDepth() const { return m_volumeParticleDepth; }
+	Bool isUsingParticles() const { return m_particleType == PARTICLE; }
+	Bool isUsingDrawables() const { return m_particleType == DRAWABLE; }
+	Bool isUsingStreak() const { return m_particleType == STREAK; }
+	Bool isUsingSmudge() const { return m_particleType == SMUDGE; }
+	Bool isUsingVolumeParticles() const { return m_particleType == VOLUME_PARTICLE; }
+	UnsignedInt getVolumeParticleDepth() const { return m_volumeParticleDepth; }
 
-	Bool shouldBillboard() { return !m_isGroundAligned; }
+	Bool shouldBillboard() const { return m_particleAlignment == PARTICLE_ALIGNMENT_BILLBOARD; }
 
-	ParticleShaderType getShaderType() { return m_shaderType; }
+	ParticleShaderType getShaderType() const { return m_shaderType; }
 
 	void setSlave( ParticleSystem *slave );			///< set a slave system for us
 	ParticleSystem *getSlave() { return m_slaveSystem; }
