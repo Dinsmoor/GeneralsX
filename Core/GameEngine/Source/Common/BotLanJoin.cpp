@@ -28,6 +28,8 @@
 
 #include "PreRTS.h"
 
+#include <signal.h>				// the shutdown handlers, see leaveLobbyForShutdown
+
 #include "Common/BotLanJoin.h"
 #include "Common/GlobalData.h"
 #include "Common/GameEngine.h"
@@ -580,12 +582,122 @@ static Bool parseIPv4(const char *text, UnsignedInt *out)
 	return TRUE;
 }
 
+/**
+	LEAVE THE LOBBY WHEN WE ARE KILLED.
+
+	Ctrl-C, a `kill`, or the launcher script taking the engine down at the
+	end of a run all stop this process wherever it happens to be -- and in
+	the lobby that is inside a Sleep(16), with no chance to say anything.
+	LANAPI is a UDP protocol with no connection to break, so the host never
+	learns we are gone: our slot stays occupied and everybody waits out the
+	host's own timeout before the game can start. That is a person sitting
+	in front of a stuck lobby wondering what the bot is doing, and it
+	happens every single time the bot is stopped by hand.
+
+	The polite exit already exists and is already used on the lobby-timeout
+	path: RequestGameLeave() sends MSG_REQUEST_GAME_LEAVE and then pumps
+	m_transport itself, precisely so the packet is on the wire before
+	anything else is torn down. Nothing called it on a signal, so this does.
+
+	WHAT IS SAFE TO DO IN A HANDLER. Very little, and this is deliberately
+	close to the edge: it sends one UDP datagram and returns. It is not
+	re-entrant, so s_leaving latches to make a second signal a no-op rather
+	than re-entering LANAPI while the first call is still inside it. It does
+	not free anything, does not touch the game loop, and does not try to
+	shut the engine down cleanly -- exiting is still the caller's job.
+
+	ONLY WHILE WE ARE IN A LOBBY. Once the match starts the slot is no
+	longer the thing holding anybody up, and a leave message mid-game would
+	be read as a player quitting, which is a different event with different
+	consequences for the remaining peers. So this does nothing after
+	s_gameStarted.
+*/
+static volatile sig_atomic_t s_leaving = 0;
+
+static void leaveLobbyForShutdown( const char *why )
+{
+	if (s_leaving)
+		return;						// already on our way out
+	s_leaving = 1;
+
+	// Nothing to leave: no lobby yet, or the match is running and our slot
+	// is not what anybody is waiting on.
+	if (TheLAN == nullptr || s_gameStarted)
+		return;
+
+	printf("BotJoin: %s -- leaving the lobby\n", why);
+	fflush(stdout);
+
+	// Both of these send one datagram and pump the transport so it is on
+	// the wire before we return; neither allocates or runs a callback.
+	// RequestGameLeave's joiner branch then sets a pending action with a
+	// timeout, which nothing will ever resolve because we are about to
+	// exit -- that is fine, the packet the host needs has already gone.
+	TheLAN->RequestGameLeave();
+	TheLAN->RequestLobbyLeave(true);
+}
+
+#ifdef _WIN32
+static BOOL WINAPI botConsoleCtrlHandler( DWORD type )
+{
+	switch (type)
+	{
+		case CTRL_C_EVENT:		leaveLobbyForShutdown("interrupted");   break;
+		case CTRL_BREAK_EVENT:	leaveLobbyForShutdown("interrupted");   break;
+		case CTRL_CLOSE_EVENT:	leaveLobbyForShutdown("console closed");break;
+		case CTRL_SHUTDOWN_EVENT:
+		case CTRL_LOGOFF_EVENT:	leaveLobbyForShutdown("shutting down"); break;
+		default: return FALSE;
+	}
+	// FALSE: we only wanted to say goodbye, the default handler still ends
+	// the process. Returning TRUE here would leave a killed bot running.
+	return FALSE;
+}
+#endif
+
+static void botSignalHandler( int sig )
+{
+	leaveLobbyForShutdown(sig == SIGINT ? "interrupted" : "terminated");
+	// Restore the default and re-raise, so the exit status is the one the
+	// caller expects from a signal rather than a plain 0.
+	signal(sig, SIG_DFL);
+	raise(sig);
+}
+
+/**
+	Arm the shutdown handlers. Called once, from both roles, after TheLAN
+	exists -- before that there is nothing to leave.
+
+	Wine delivers a `kill` as a POSIX signal to the emulated process, and a
+	console Ctrl-C through the Win32 console path, so both are wired: which
+	one fires depends on how the bot was stopped, and the launcher script
+	uses `kill`.
+*/
+static void armShutdownHandlers()
+{
+	static Bool armed = FALSE;
+	if (armed)
+		return;
+	armed = TRUE;
+
+	signal(SIGINT,  botSignalHandler);
+	signal(SIGTERM, botSignalHandler);
+#ifdef _WIN32
+	SetConsoleCtrlHandler(botConsoleCtrlHandler, TRUE);
+#endif
+}
+
 // peerIP 0 means "no particular peer" -- the host case.
 Bool startLan(UnsignedInt peerIP)
 {
 	delete TheLAN;
 	TheLAN = NEW LANAPI();
 	TheLAN->init();
+
+	// There is now a lobby to leave, so make being killed say so. Both
+	// roles come through here, and a killed HOST strands its joiners the
+	// same way a killed joiner strands the host.
+	armShutdownHandlers();
 
 	UnsignedInt ip = 0;
 	if (!TheGlobalData->m_netLocalIP.isEmpty())
