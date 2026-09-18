@@ -83,6 +83,18 @@ static const KindOfType KIND_BITS[] = {
 	// any infantry being put in that bunker that came with the map".
 	// Same shape of blindness as FS_AIRFIELD not existing.
 	KINDOF_GARRISONABLE_UNTIL_DESTROYED,
+	// A superweapon structure: nuke silo, particle uplink, scud storm.
+	// The bit has always existed; it was simply never exported, so the bot
+	// identified the silo by GUESSING -- "costs >= $4,000 and draws >= 5
+	// power" -- and that guess is what hid two real bugs. Because the name
+	// was settled speculatively, before one was ever built, the
+	// identification loop stopped running and NOTHING ever read the
+	// standing building's command set. The missile was never offered, so
+	// it was never fired; and the silo's two tank upgrades -- Uranium
+	// Shells and Nuclear Tanks, which apply to every BattleMaster and
+	// Overlord -- were never even seen. Tyler, 2026-09-17, on a match
+	// where the silo stood with the missile ready the whole time.
+	KINDOF_FS_SUPERWEAPON,
 };
 static const char *const KIND_BIT_NAMES[] = {
 	"STRUCTURE", "INFANTRY", "VEHICLE", "AIRCRAFT",
@@ -92,7 +104,7 @@ static const char *const KIND_BIT_NAMES[] = {
 	"FS_WARFACTORY", "CAN_ATTACK", "TRANSPORT",
 	"TECH_BUILDING", "HERO", "PROJECTILE",
 	"CAPTURABLE", "TECH_BASE_DEFENSE", "REPAIR_PAD",
-	"GARRISONABLE",
+	"GARRISONABLE", "FS_SUPERWEAPON",
 };
 static const Int KIND_BIT_COUNT = sizeof(KIND_BITS) / sizeof(KIND_BITS[0]);
 
