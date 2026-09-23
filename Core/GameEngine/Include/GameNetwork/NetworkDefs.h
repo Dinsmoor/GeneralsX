@@ -234,6 +234,63 @@ static const Int NETWORK_BASE_PORT_NUMBER = 8088;
 // comment on that member), which is what lets two engines share one host.
 static const UnsignedShort LAN_LOBBY_PORT_DEFAULT = 8086;
 
+/*	TheSuperHackers @feature Derive a peer's gameplay port from its lobby port.
+
+	The wire format is frozen: a stock retail client must be able to host us and
+	we must be able to host it, byte for byte. LANMessage has no field in which a
+	joiner could state its gameplay port, and only the HOST ever authors the slot
+	list that carries ports to everyone (LANAPIhandlers.cpp handleRequestGameInfo
+	and LANAPI::RequestGameAnnounce, both gated on getIP(0) == m_localIP). So the
+	host cannot be TOLD a joiner's gameplay port -- it must derive it from
+	something it already has, and what it has is the source port of the join
+	request, recorded by LANAPI::notePeerPort.
+
+	Hence this function rather than a second configurable value: the gameplay
+	port is a pure function of the lobby port, so host and joiner always agree
+	without exchanging anything new.
+
+	The two ranges grow AWAY from each other from the retail anchor -- lobby
+	counts down from 8086, gameplay counts up from 8088 -- because the retail gap
+	between them is only 2. Any scheme that walks both ranges upward with a
+	stride of 2 or less interleaves them, and instance 2's lobby port lands on
+	instance 0's gameplay port. Measured, not assumed.
+
+	    instance   lobby   gameplay
+	           0    8086       8088      <-- retail, and a stock client
+	           1    8085       8089
+	           2    8084       8090
+	           7    8079       8095
+
+	A stock peer sits at lobby 8086, so the offset is 0 and this returns 8088
+	exactly. Retail compatibility is arithmetic here, not a special case.
+*/
+inline UnsignedShort LANGamePortFromLobbyPort(UnsignedShort lobbyPort)
+{
+	if ((lobbyPort == 0) || (lobbyPort > LAN_LOBBY_PORT_DEFAULT))
+		return (UnsignedShort)NETWORK_BASE_PORT_NUMBER;
+	return (UnsignedShort)(NETWORK_BASE_PORT_NUMBER + (LAN_LOBBY_PORT_DEFAULT - lobbyPort));
+}
+
+/*	TheSuperHackers @feature The inverse: a peer's LOBBY port from its GAMEPLAY one.
+
+	Needed because a GameSlot records a peer's GAMEPLAY port -- that is what
+	ConnectionManager wants -- while LANAPI traffic (slot lists, chat, game start)
+	has to reach that peer's LOBBY port. The slot is the only per-peer record that
+	survives in a lobby of co-located instances, since it carries a port and the
+	peer-port table is keyed by address alone, so this inversion is what lets the
+	directed fan-out in sendMessage() address them individually.
+
+	Returns LAN_LOBBY_PORT_DEFAULT for 0 (an unfilled slot) or for anything below
+	the retail base, so a slot we have not learned about yet is treated as a stock
+	client rather than mapped to a nonsense port.
+*/
+inline UnsignedShort LANLobbyPortFromGamePort(UnsignedShort gamePort)
+{
+	if ((gamePort == 0) || (gamePort < (UnsignedShort)NETWORK_BASE_PORT_NUMBER))
+		return LAN_LOBBY_PORT_DEFAULT;
+	return (UnsignedShort)(LAN_LOBBY_PORT_DEFAULT - (gamePort - NETWORK_BASE_PORT_NUMBER));
+}
+
 // the singleton
 class NetworkInterface;
 extern NetworkInterface *TheNetwork;

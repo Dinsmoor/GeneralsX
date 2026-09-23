@@ -902,8 +902,30 @@ const MapMetaData *findMapByName( const AsciiString& mapName, AsciiString& keyOu
 	const MapMetaData *md = TheMapCache->findMap(lower);
 	if (md != nullptr)
 	{
-		keyOut = lower;
-		return md;
+		/*	NOT keyOut = lower. findMap() is a FUZZY lookup -- it matches on the
+			display name and on the leaf of the path -- so it happily resolves a
+			plain "alpine assault" that is nothing like the key it found. Handing
+			that query back as the key looks harmless and breaks the whole LAN
+			join, because keyOut becomes the map PATH via setMap():
+
+			  setMap("alpine assault")
+			    -> realMapPathToPortableMapPath() matches none of the three known
+			       map directories, so its DEBUG_CRASH fires -- compiled out in a
+			       release build -- and it returns the raw string unchanged
+			    -> buildGameInfoAsciiString() keeps only the DIRECTORY tokens of
+			       that path, and a bare name has none, so the map field is empty
+			    -> the announce goes out as "M=01;" and every joiner's
+			       ParseAsciiStringToGameInfo() rejects it at `val.getLength() < 3`
+			       ("saw bogus map"), another compiled-out DEBUG_LOG
+
+			m_fileName is the real thing: MapCache::addMap() stores the cache key
+			and m_fileName from the same lowerFname, so they are equal by
+			construction. */
+		keyOut = md->m_fileName;
+		if (!keyOut.isEmpty())
+			return md;
+		// No filename recorded: fall through to the tail scan below rather than
+		// return a key we know is unusable.
 	}
 
 	AsciiString tail, tailFwd;
@@ -1676,35 +1698,45 @@ Int BotLanJoin::runLanJoin()
 			return 1;					// startLan already said why
 	}
 
-	/*	Refuse to share BOTH an address and a port with the host.
+	/*	Refuse to share BOTH an address and a lobby port with the host.
 
 		LANAPI was written assuming one engine per machine -- "everyone has a
 		unique IP, so it's ok to use the same port" -- so originally sharing an
 		address at all was fatal: two engines fought over the lobby port and
 		the transport bind, and the host was the one that died.
 
-		Now that the lobby port is configurable, the real requirement is
-		narrower: the pair (address, port) has to be unique, not the address.
-		Distinct loopback addresses still work and remain the simplest answer,
-		but a distinct lanPort is now equally valid -- which matters on a host
-		with no spare addresses to hand out.
+		Both ports are configurable now -- the lobby port directly, the gameplay
+		port derived from it (LANGamePortFromLobbyPort) -- so the requirement is
+		the narrow one it always should have been: the pair (address, port) must
+		be unique. Distinct loopback addresses remain the simplest answer and
+		keep the peer-port table unambiguous (see LANAPI::notePeerPort), but a
+		distinct lanPort alone is now sufficient to coexist, which is what lets
+		one machine run a whole lobby with no spare addresses.
 
-		The game transport is the reason an address clash is still checked at
-		all: ConnectionManager binds NETWORK_BASE_PORT_NUMBER on the local
-		address, and that port is NOT configurable, so two engines on one
-		address would still collide once the match itself started -- just later
-		and far more confusingly than a refused bind.
+		Sharing the lobby port on one address is still refused, and now that is
+		a complete test rather than a proxy for one: an equal lobby port implies
+		an equal derived gameplay port, so such a pair collides on both.
 	*/
-	if (TheLAN->GetLocalIP() == hostIP)
+	/*	What lobby port will we actually be talking to?
+
+		An explicit "host = IP:PORT" says so outright. Otherwise hostPort is 0
+		and we fall back to what LANAPI learned from the host's own announce --
+		peerPort(), via the public accessor -- which is the right answer for the
+		discovery path above, where we never typed a port but did hear from the
+		host. peerPort() itself falls back to the default for an unknown peer,
+		so this is correct in all three cases. */
+	const UnsignedShort hostLobbyPort =
+		(hostPort != 0) ? hostPort : TheLAN->GetPeerLobbyPort(hostIP);
+	if ((TheLAN->GetLocalIP() == hostIP) && (TheLAN->GetLobbyPort() == hostLobbyPort))
 	{
-		printf("BotNet: I bound to %d.%d.%d.%d, which is the host's own address.\n",
-			PRINTF_IP_AS_4_INTS(hostIP));
-		printf("BotNet: two engines cannot share one address: the in-game transport\n");
-		printf("BotNet: binds port %d on it and that port is not configurable.\n",
-			NETWORK_BASE_PORT_NUMBER);
-		printf("BotNet: If the host is on THIS machine, give us a different one --\n");
-		printf("BotNet: the whole 127/8 range is routable and needs no setup:\n");
-		printf("BotNet:     host = 127.0.0.1   localIP = 127.0.0.2\n");
+		printf("BotNet: I bound to %d.%d.%d.%d:%d, which is the host's own address\n",
+			PRINTF_IP_AS_4_INTS(hostIP), (Int)TheLAN->GetLobbyPort());
+		printf("BotNet: and lobby port, so we would fight over both that port and the\n");
+		printf("BotNet: gameplay port %d derived from it.\n",
+			(Int)LANGamePortFromLobbyPort(TheLAN->GetLobbyPort()));
+		printf("BotNet: Give us a different address, or a different lanPort:\n");
+		printf("BotNet:     host = 127.0.0.1        localIP = 127.0.0.2\n");
+		printf("BotNet:     host = 127.0.0.1:8086   lanPort = 8085\n");
 		return 1;
 	}
 

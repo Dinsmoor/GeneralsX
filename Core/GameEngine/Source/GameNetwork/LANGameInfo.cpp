@@ -81,7 +81,29 @@ Bool LANGameSlot::isUser( UnicodeString userName )
 
 Bool LANGameSlot::isLocalPlayer() const
 {
-	return isHuman() && TheLAN && TheLAN->GetLocalIP() == getIP();
+	/*	TheSuperHackers @bugfix identity is (address, port), not address alone.
+
+		getLocalSlotNum() is built on this test, so an address-only compare made
+		every co-located instance resolve to the SAME slot -- six bots on one
+		machine all believing they were the same player. That is not a lost
+		packet: the slot number selects which player we control, and which slot
+		the directed fan-out in LANAPI::sendMessage skips as "us".
+
+		A slot records the peer's GAMEPLAY port, so compare ours. A slot whose
+		port is still 0 has not been filled in yet (an announce we have not
+		parsed, or our own slot before setPort), so fall back to the address
+		match and stay conservative rather than newly answering FALSE.
+
+		Retail is unaffected: with one instance per machine the address already
+		identified us uniquely, and our own slot carries our own port.
+	*/
+	if (!isHuman() || !TheLAN || TheLAN->GetLocalIP() != getIP())
+		return FALSE;
+
+	const UnsignedShort slotPort = getPort();
+	if (slotPort == 0)
+		return TRUE;
+	return slotPort == TheLAN->GetGamePort();
 }
 
 // LANGameInfo ----------------------------------------

@@ -9,6 +9,7 @@
 #include "GameClient/ClientInstance.h"
 #include "Common/GlobalData.h"
 #include "Common/UserPreferences.h"
+#include "GameNetwork/NetworkDefs.h"	// LAN_LOBBY_PORT_DEFAULT, and the port pairing
 
 namespace
 {
@@ -216,9 +217,22 @@ Bool BotConfig::load( const AsciiString& fname )
 	*/
 	if (getInt(prefs, "lanPort", &i))
 	{
-		if ((i < 1) || (i > 65535))
+		/*	The upper bound is LAN_LOBBY_PORT_DEFAULT, not 65535, because the
+			gameplay port is DERIVED from this one by counting the other way
+			(LANGamePortFromLobbyPort): lobby 8086-n pairs with gameplay 8088+n.
+			A lobby port above 8086 has no gameplay port to pair with -- the
+			derivation would clamp it back to 8088 -- so two such instances would
+			quietly share the gameplay port while looking configured, which is
+			exactly the silent failure this range check exists to prevent.
+
+			The floor keeps the pair inside a sane block; 8 instances need only
+			8079..8086, and MAX_SLOTS is 8. */
+		if ((i < LAN_LOBBY_PORT_DEFAULT - (MAX_SLOTS - 1)) || (i > LAN_LOBBY_PORT_DEFAULT))
 		{
-			fprintf(stderr, "BotConfig: lanPort must be 1..65535, not %d\n", i);
+			fprintf(stderr, "BotConfig: lanPort must be %d..%d, not %d\n",
+				(Int)(LAN_LOBBY_PORT_DEFAULT - (MAX_SLOTS - 1)), (Int)LAN_LOBBY_PORT_DEFAULT, i);
+			fprintf(stderr, "BotConfig: it pairs with gameplay port %d..%d; see NetworkDefs.h\n",
+				NETWORK_BASE_PORT_NUMBER, NETWORK_BASE_PORT_NUMBER + (MAX_SLOTS - 1));
 			fflush(stderr);
 			return FALSE;
 		}

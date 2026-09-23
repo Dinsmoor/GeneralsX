@@ -95,7 +95,9 @@ void LANAPI::handleRequestLocations( LANMessage *msg, UnsignedInt senderIP )
 		// In game - are we a game host?
 		if (m_currentGame)
 		{
-			if (m_currentGame->getIP(0) == m_localIP)
+			// TheSuperHackers @bugfix AmIHost() compares (address, port); an inline
+			// address-only test made every co-located instance answer as the host.
+			if (AmIHost())
 			{
 				AsciiString gameOpts = GenerateGameOptionsString();
 				if (!gameOpts.isEmpty())
@@ -147,7 +149,14 @@ void LANAPI::handleGameAnnounce( LANMessage *msg, UnsignedInt senderIP )
 	/* 	fprintf(stderr, "[LAN86] handleGameAnnounce sender=%d.%d.%d.%d game=%ls inProgress=%d direct=%d\n",
 		PRINTF_IP_AS_4_INTS(senderIP), GetWindowsWideCharAsWchar(msg->GameInfo.gameName),
 		msg->GameInfo.inProgress, msg->GameInfo.isDirectConnect); */
-	if (senderIP == m_localIP)
+	/*	TheSuperHackers @bugfix was `senderIP == m_localIP`, which is upstream of
+		every other co-located-instance problem: a second engine on this machine
+		announces from our own address (the kernel stamps it -- see isFromSelf),
+		so we threw its announce away and NEVER DISCOVERED ITS GAME AT ALL. No
+		discovery, no join, however well everything downstream works.
+
+		isFromSelf also compares the port, so our own echo is still ignored. */
+	if (isFromSelf(senderIP))
 	{
 		return; // Don't try to update own info
 	}
@@ -157,7 +166,6 @@ void LANAPI::handleGameAnnounce( LANMessage *msg, UnsignedInt senderIP )
 	}
 	else if (senderIP == m_directConnectRemoteIP)
 	{
-
 		if (m_currentGame == nullptr)
 		{
 			// GeneralsX @bugfix BenderAI 13/02/2026 Wrap WideCharWindows with GetWindowsWideCharAsWchar (fighter19 pattern)
@@ -253,7 +261,7 @@ void LANAPI::handleRequestGameInfo( LANMessage *msg, UnsignedInt senderIP )
 	// In game - are we a game host?
 	if (m_currentGame)
 	{
-		if (m_currentGame->getIP(0) == m_localIP || (m_currentGame->isGameInProgress() && TheNetwork && TheNetwork->isPacketRouter())) // if we're in game we should reply if we're the packet router
+		if (AmIHost() || (m_currentGame->isGameInProgress() && TheNetwork && TheNetwork->isPacketRouter())) // if we're in game we should reply if we're the packet router
 		{
 			AsciiString gameOpts = GameInfoToAsciiString(m_currentGame);
 			if (gameOpts.isEmpty())
@@ -271,7 +279,7 @@ void LANAPI::handleRequestGameInfo( LANMessage *msg, UnsignedInt senderIP )
 			reply.GameInfo.inProgress = m_currentGame->isGameInProgress();
 			reply.GameInfo.isDirectConnect = m_currentGame->getIsDirectConnect();
 
-			sendMessage(&reply, senderIP);
+			replyToSender(&reply, senderIP);
 		}
 	}
 }
@@ -338,7 +346,7 @@ void LANAPI::handleRequestJoin( LANMessage *msg, UnsignedInt senderIP )
 	}
 	LANMessage reply;
 	fillInLANMessage( &reply );
-	if (!m_inLobby && m_currentGame && m_currentGame->getIP(0) == m_localIP)
+	if (!m_inLobby && AmIHost())
 	{
 		if (m_currentGame->isGameInProgress())
 		{
@@ -476,7 +484,23 @@ void LANAPI::handleRequestJoin( LANMessage *msg, UnsignedInt senderIP )
 					// GeneralsX @bugfix BenderAI 13/02/2026 Wrap WideCharWindows with GetWindowsWideCharAsWchar (fighter19 pattern)
 					newSlot.setState(SLOT_PLAYER, UnicodeString(GetWindowsWideCharAsWchar(msg->name)));
 					newSlot.setIP(senderIP);
-					newSlot.setPort(NETWORK_BASE_PORT_NUMBER);
+					/*	TheSuperHackers @feature this is the load-bearing half of
+						per-instance gameplay ports, and the reason they are derived
+						rather than configured.
+
+						We are the host, filling in a slot for SOMEBODY ELSE, and we
+						then publish that slot to every peer. The joiner has no way to
+						tell us its gameplay port: the wire format is frozen for retail
+						compatibility and GameToJoin carries only gameIP, exeCRC,
+						iniCRC and serial. What we DO have is the source port of the
+						join request we are handling right now, which LANAPI::update
+						recorded via notePeerPort before dispatching here. Deriving the
+						gameplay port from that lobby port is what lets two engines on
+						one machine be told apart by everyone in the game.
+
+						A stock client joins from lobby 8086, so this yields 8088 and
+						the slot is byte-identical to what the original code wrote. */
+					newSlot.setPort(GetPeerGamePort(senderIP));
 					newSlot.setLastHeard(timeGetTime());
 					newSlot.setSerial(msg->GameToJoin.serial);
 					m_currentGame->setSlot(player,newSlot);
@@ -514,29 +538,28 @@ void LANAPI::handleRequestJoin( LANMessage *msg, UnsignedInt senderIP )
 		/* 		fprintf(stderr, "[LAN86] handleRequestJoin deny sender=%d.%d.%d.%d reason=game-gone responseIP=%d.%d.%d.%d\n",
 			PRINTF_IP_AS_4_INTS(senderIP), PRINTF_IP_AS_4_INTS(responseIP)); */
 	}
-	/*	TheSuperHackers @fix Always answer the joiner DIRECTLY as well.
+	/*	Answer the joiner directly.
 
-		On the accept path responseIP is deliberately 0, which makes
-		sendMessage broadcast so every client in the game learns the new
-		slot list. But that leaves the one machine that actually asked --
-		the joiner -- relying on a broadcast reaching it, and a broadcast
-		is the least reliable way to reach a host that just contacted us
-		by unicast. It fails outright when the joiner is on an address
-		that does not receive this broadcast domain (a second engine on
-		one machine, a routed or segmented LAN, some VPN setups). The
-		symptom is nasty and silent: the host seats the player and shows
-		them in the lobby, the joiner never hears JOIN_ACCEPT, stays in
-		ACT_JOIN, never starts sending its HELLO keepalive, and is dropped
-		~80 seconds later as "not responding".
+		TheSuperHackers @info corrected 2026-09-22. An earlier version of this
+		comment claimed "on the accept path responseIP is deliberately 0, which
+		makes sendMessage broadcast". That was simply wrong about this code:
+		responseIP is initialised to senderIP at the top of this function and is
+		never reassigned on any path, accept or deny. So this call has always
+		been a unicast straight back to whoever asked, and the second send below
+		it -- guarded on `responseIP == 0` -- was unreachable.
 
-		So keep the broadcast for everyone else, and additionally unicast
-		the reply to the sender. A duplicate is harmless: handleJoinAccept
-		is guarded by `m_pendingAction == ACT_JOIN` and clears it, so the
-		second copy is ignored.
+		That guard also carried `senderIP != m_localIP`, which would have
+		suppressed the direct reply for a co-located joiner: exactly the peer a
+		broadcast cannot reach, and the one the extra send was meant to rescue.
+		Removed rather than fixed, because the unicast above already does the job.
+
+		This unicast is what makes co-located joining work at all, and it is why
+		six bots on one machine do not steal each other's accepts: each accept
+		reaches only the bot that asked, and that bot only acts on it while
+		m_pendingAction == ACT_JOIN (see handleJoinAccept), which it then clears.
+		Verified, not assumed -- it is the reason no new wire field is needed.
 	*/
-	sendMessage(&reply, responseIP);
-	if (responseIP == 0 && senderIP != 0 && senderIP != m_localIP)
-		sendMessage(&reply, senderIP);
+	replyToSender(&reply, responseIP);
 
 	RequestGameOptions(GenerateGameOptionsString(), true);
 }
@@ -547,18 +570,9 @@ void LANAPI::handleJoinAccept( LANMessage *msg, UnsignedInt senderIP )
 	/* 	fprintf(stderr, "[LAN86] handleJoinAccept sender=%d.%d.%d.%d playerIP=%d.%d.%d.%d localIP=%d.%d.%d.%d pending=%d slot=%d game=%ls\n",
 		PRINTF_IP_AS_4_INTS(senderIP), PRINTF_IP_AS_4_INTS(msg->GameJoined.playerIP), PRINTF_IP_AS_4_INTS(m_localIP),
 		m_pendingAction, msg->GameJoined.slotPosition, GetWindowsWideCharAsWchar(msg->GameJoined.gameName)); */
-	if (TheShell == nullptr)
-	{
-		// gameName is WideCharWindows here, not wchar_t: go through the same
-		// conversion helper the rest of this file uses.
-		AsciiString gn; gn.translate(UnicodeString(GetWindowsWideCharAsWchar(msg->GameJoined.gameName)));
-		printf("JOINTRACE: JOIN_ACCEPT for %d.%d.%d.%d (mine %d.%d.%d.%d) pending=%d game='%s' lookup=%p\n",
-			PRINTF_IP_AS_4_INTS(msg->GameJoined.playerIP),
-			PRINTF_IP_AS_4_INTS(m_localIP), (int)m_pendingAction, gn.str(),
-			(void*)LookupGame(UnicodeString(GetWindowsWideCharAsWchar(msg->GameJoined.gameName))));
-		fflush(stdout);
-	}
-	if (msg->GameJoined.playerIP == m_localIP) // Is it for us?
+	// isAddressedToSelf, not == m_localIP: the host echoes the address IT saw,
+	// which over loopback is not the one we bound. See LANAPI.h.
+	if (isAddressedToSelf(msg->GameJoined.playerIP)) // Is it for us?
 	{
 		if (m_pendingAction == ACT_JOIN) // Are we trying to join?
 		{
@@ -579,10 +593,43 @@ void LANAPI::handleJoinAccept( LANMessage *msg, UnsignedInt senderIP )
 
 				Int pos = msg->GameJoined.slotPosition;
 
+				/*	Adopt the address the HOST gave us, which is the one it
+					observed and therefore the one it has put in the slot list
+					that every other peer will use to reach us. Over loopback it
+					is not the address we bound (we asked for 127.0.0.2, the
+					kernel sourced from 127.0.0.1), and if we keep ours instead
+					then the host's next slot-list update overwrites our slot
+					with its value and isLocalPlayer() can no longer find us --
+					we would be in the game and unable to see ourselves in it.
+
+					On a real NIC this is the same value as m_localIP, so
+					nothing changes for a retail peer.
+
+					Assign the field, do NOT call SetLocalIP(): that resets and
+					re-inits the transport, which would tear down the very
+					socket this accept arrived on, mid-join. Rebinding buys
+					nothing anyway -- on POSIX the lobby socket binds
+					INADDR_ANY, so which local address it "has" does not affect
+					what it receives. What we are correcting is our IDENTITY,
+					not our binding. */
+				if (isAddressedToSelf(msg->GameJoined.playerIP) &&
+						(msg->GameJoined.playerIP != m_localIP))
+				{
+					m_localIP = msg->GameJoined.playerIP;
+				}
+
 				LANGameSlot slot;
 				slot.setState(SLOT_PLAYER, m_name);
 				slot.setIP(m_localIP);
-				slot.setPort(NETWORK_BASE_PORT_NUMBER);
+				/*	TheSuperHackers @feature our own slot on being accepted, so this
+					is the port we bind. It must match what the host independently
+					derived for us in handleRequestJoin, and it does: both sides run
+					LANGamePortFromLobbyPort over the same lobby port -- ours directly,
+					the host's from the source port of our join request. This value is
+					local anyway; the host's slot list is authoritative and overwrites
+					it moments later. Setting it correctly keeps the two consistent in
+					the window before that arrives. */
+				slot.setPort(GetGamePort());
 				slot.setLastHeard(0);
 				slot.setLogin(m_userName);
 				slot.setHost(m_hostName);
@@ -617,7 +664,12 @@ void LANAPI::handleJoinDeny( LANMessage *msg, UnsignedInt senderIP )
 	/* 	fprintf(stderr, "[LAN86] handleJoinDeny sender=%d.%d.%d.%d playerIP=%d.%d.%d.%d localIP=%d.%d.%d.%d pending=%d reason=%d game=%ls\n",
 		PRINTF_IP_AS_4_INTS(senderIP), PRINTF_IP_AS_4_INTS(msg->GameJoined.playerIP), PRINTF_IP_AS_4_INTS(m_localIP),
 		m_pendingAction, msg->GameNotJoined.reason, GetWindowsWideCharAsWchar(msg->GameNotJoined.gameName)); */
-	if (msg->GameJoined.playerIP == m_localIP) // Is it for us?
+	/*	Same widening as handleJoinAccept, and it matters just as much: a DENY
+		dropped because the host named an address we do not recognise leaves us
+		retrying for ever instead of reporting why we were refused. The reason
+		that will actually come up is RET_DUPLICATE_NAME, since several bots on
+		one machine must each have a distinct name. */
+	if (isAddressedToSelf(msg->GameJoined.playerIP)) // Is it for us?
 	{
 		if (m_pendingAction == ACT_JOIN) // Are we trying to join?
 		{
@@ -633,56 +685,60 @@ void LANAPI::handleRequestGameLeave( LANMessage *msg, UnsignedInt senderIP )
 {
 	if (!m_inLobby && m_currentGame && !m_currentGame->isGameInProgress())
 	{
-		int player;
-		for (player = 0; player < MAX_SLOTS; ++player)
+		/*	Resolve by (address, port). An address-only scan returns slot 0 for
+			every co-located player, and slot 0 means THE HOST LEFT -- so one
+			bot quitting would have torn down the game for everybody. */
+		const Int player = slotForSender(senderIP);
+		if (player >= 0)
 		{
-			if (m_currentGame->getIP(player) == senderIP)
+			if (player == 0)
 			{
-				if (player == 0)
+				OnHostLeave();
+				removeGame(m_currentGame);
+				delete m_currentGame;
+				m_currentGame = nullptr;
+
+				/// @todo re-add myself to lobby?  Or just keep me there all the time?  If we send a LOBBY_ANNOUNCE things'll work out...
+				LANPlayer *lanPlayer = LookupPlayer(m_localIP);
+				if (!lanPlayer)
 				{
-					OnHostLeave();
-					removeGame(m_currentGame);
-					delete m_currentGame;
-					m_currentGame = nullptr;
-
-					/// @todo re-add myself to lobby?  Or just keep me there all the time?  If we send a LOBBY_ANNOUNCE things'll work out...
-					LANPlayer *lanPlayer = LookupPlayer(m_localIP);
-					if (!lanPlayer)
-					{
-						lanPlayer = NEW LANPlayer;
-						lanPlayer->setIP(m_localIP);
-					}
-					else
-					{
-						removePlayer(lanPlayer);
-					}
-					lanPlayer->setName(UnicodeString(m_name));
-					lanPlayer->setHost(m_hostName);
-					lanPlayer->setLogin(m_userName);
-					lanPlayer->setLastHeard(timeGetTime());
-					addPlayer(lanPlayer);
-
+					lanPlayer = NEW LANPlayer;
+					lanPlayer->setIP(m_localIP);
 				}
 				else
 				{
-					if (AmIHost())
-					{
-						// remove the deadbeat
-						LANGameSlot slot;
-						slot.setState(SLOT_OPEN);
-						m_currentGame->setSlot( player, slot );
-					}
-					// GeneralsX @bugfix BenderAI 13/02/2026 Wrap WideCharWindows with GetWindowsWideCharAsWchar (fighter19 pattern)
-					OnPlayerLeave(UnicodeString(GetWindowsWideCharAsWchar(msg->name)));
-					m_currentGame->getLANSlot(player)->setState(SLOT_OPEN);
-					m_currentGame->resetAccepted();
-					RequestGameOptions(GenerateGameOptionsString(), false, senderIP);
-					//m_currentGame->endGame();
+					removePlayer(lanPlayer);
 				}
-				break;
+				lanPlayer->setName(UnicodeString(m_name));
+				lanPlayer->setHost(m_hostName);
+				lanPlayer->setLogin(m_userName);
+				lanPlayer->setLastHeard(timeGetTime());
+				addPlayer(lanPlayer);
+
 			}
-			DEBUG_ASSERTCRASH(player < MAX_SLOTS, ("Didn't find player!"));
+			else
+			{
+				if (AmIHost())
+				{
+					// remove the deadbeat
+					LANGameSlot slot;
+					slot.setState(SLOT_OPEN);
+					m_currentGame->setSlot( player, slot );
+				}
+				// GeneralsX @bugfix BenderAI 13/02/2026 Wrap WideCharWindows with GetWindowsWideCharAsWchar (fighter19 pattern)
+				OnPlayerLeave(UnicodeString(GetWindowsWideCharAsWchar(msg->name)));
+				m_currentGame->getLANSlot(player)->setState(SLOT_OPEN);
+				m_currentGame->resetAccepted();
+				RequestGameOptions(GenerateGameOptionsString(), false, senderIP);
+				//m_currentGame->endGame();
+			}
 		}
+		/*	No DEBUG_ASSERTCRASH on player < 0 here. The original one sat INSIDE
+			the match, where `player < MAX_SLOTS` held by construction, so it
+			could never fire. Moving it out would make it live -- and it would
+			fire on an ordinary event: a LEAVE from someone who is not in our
+			game, which co-located instances see routinely, because a loopback
+			broadcast reaches every listener on the machine. */
 	}
 	else if (m_inLobby)
 	{
@@ -725,14 +781,11 @@ void LANAPI::handleSetAccept( LANMessage *msg, UnsignedInt senderIP )
 {
 	if (!m_inLobby && m_currentGame && !m_currentGame->isGameInProgress())
 	{
-		int player;
-		for (player = 0; player < MAX_SLOTS; ++player)
+		// slotForSender: address alone matches the wrong player when two
+		// instances share one. See LANAPI.h.
+		if (slotForSender(senderIP) >= 0)
 		{
-			if (m_currentGame->getIP(player) == senderIP)
-			{
-				OnAccept(senderIP, msg->Accept.isAccepted);
-				break;
-			}
+			OnAccept(senderIP, msg->Accept.isAccepted);
 		}
 	}
 }
@@ -750,14 +803,9 @@ void LANAPI::handleHasMap( LANMessage *msg, UnsignedInt senderIP )
 			return;
 		}
 
-		int player;
-		for (player = 0; player < MAX_SLOTS; ++player)
+		if (slotForSender(senderIP) >= 0)
 		{
-			if (m_currentGame->getIP(player) == senderIP)
-			{
-				OnHasMap(senderIP, msg->MapStatus.hasMap);
-				break;
-			}
+			OnHasMap(senderIP, msg->MapStatus.hasMap);
 		}
 	}
 }
@@ -787,15 +835,11 @@ void LANAPI::handleChat( LANMessage *msg, UnsignedInt senderIP )
 			return;
 		}
 
-		int player;
-		for (player = 0; player < MAX_SLOTS; ++player)
+		const Int player = slotForSender(senderIP);
+		if (player >= 0)
 		{
-			if (m_currentGame && m_currentGame->getIP(player) == senderIP)
-			{
-				// GeneralsX @bugfix BenderAI 13/02/2026 Wrap WideCharWindows with GetWindowsWideCharAsWchar (fighter19 pattern)
-				OnChat(UnicodeString(GetWindowsWideCharAsWchar(msg->name)), m_currentGame->getIP(player), UnicodeString(GetWindowsWideCharAsWchar(msg->Chat.message)), msg->Chat.chatType);
-				break;
-			}
+			// GeneralsX @bugfix BenderAI 13/02/2026 Wrap WideCharWindows with GetWindowsWideCharAsWchar (fighter19 pattern)
+			OnChat(UnicodeString(GetWindowsWideCharAsWchar(msg->name)), m_currentGame->getIP(player), UnicodeString(GetWindowsWideCharAsWchar(msg->Chat.message)), msg->Chat.chatType);
 		}
 	}
 }
@@ -820,14 +864,12 @@ void LANAPI::handleGameOptions( LANMessage *msg, UnsignedInt senderIP )
 {
 	if (!m_inLobby && m_currentGame && !m_currentGame->isGameInProgress())
 	{
-		int player;
-		for (player = 0; player < MAX_SLOTS; ++player)
+		// The slot number is what OnGameOptions acts on, so resolving it by
+		// address alone would apply one player's options to another.
+		const Int player = slotForSender(senderIP);
+		if (player >= 0)
 		{
-			if (m_currentGame->getIP(player) == senderIP)
-			{
-				OnGameOptions(senderIP, player, AsciiString(msg->GameOptions.options));
-				break;
-			}
+			OnGameOptions(senderIP, player, AsciiString(msg->GameOptions.options));
 		}
 	}
 }

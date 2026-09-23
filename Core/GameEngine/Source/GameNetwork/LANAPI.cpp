@@ -113,6 +113,8 @@ LANAPI::LANAPI() : m_transport(nullptr)
 	if ((TheGlobalData != nullptr) && (TheGlobalData->m_netLobbyPort != 0))
 		m_lobbyPort = (UnsignedShort)TheGlobalData->m_netLobbyPort;
 
+	m_senderPort = 0;
+
 	for (Int p = 0; p < MAX_PEER_PORTS; ++p)
 	{
 		m_peerPorts[p].ip = 0;
@@ -127,9 +129,21 @@ LANAPI::LANAPI() : m_transport(nullptr)
 	relays chat on its own schedule, to peers it enumerated earlier. Those sends
 	need the port as much as a reply does, so it is learned once and kept.
 
-	The table is tiny and keyed by IP. Two engines on one host share an IP only
-	if someone points them at the same address, which cannot work anyway (they
-	would collide on the game port 8088 as well), so IP is a sufficient key.
+	The table is tiny and keyed by IP, so it cannot represent two peers that share
+	an address and differ only by port -- the second overwrites the first. That is
+	a real limit, but a bounded one, because this table is now only a FALLBACK:
+
+	  * inside a handler, replyToSender() uses m_senderPort, the actual source
+	    port of the packet in hand, and never consults this table;
+	  * both directed fan-outs take the port from the SLOT
+	    (LANLobbyPortFromGamePort), which is per-peer and so unambiguous;
+	  * slotForSender() identifies a sender by (address, port) from the slot list.
+
+	What is left on this table is the case with no slot and no packet to hand: the
+	first unsolicited send to a peer we have only heard announce. There the worst
+	outcome is one message to a sibling's port, and every such message is either
+	retried or idempotent. So several instances CAN share one address, including
+	in a lobby; distinct addresses merely remove this last ambiguity.
 	A peer that moves port -- a restarted engine on the same loopback address --
 	overwrites its own entry, which is what we want. When the table is full the
 	oldest-looking slot loses; it holds twice MAX_SLOTS, so a full lobby plus the
@@ -137,7 +151,18 @@ LANAPI::LANAPI() : m_transport(nullptr)
 */
 void LANAPI::notePeerPort(UnsignedInt ip, UnsignedShort port)
 {
-	if ((ip == 0) || (port == 0) || (ip == m_localIP))
+	/*	TheSuperHackers @bugfix skip only GENUINE self: our address AND our port.
+
+		Testing the address alone discarded the very entry we needed. A
+		co-located peer's loopback packets arrive claiming OUR address (the
+		kernel stamps 127.0.0.1 on sends from a wildcard-bound socket -- see the
+		self-echo filter in update()), so "ip == m_localIP" threw away the real
+		peer's port. peerPort() then fell back to LAN_LOBBY_PORT_DEFAULT and the
+		host answered a co-located joiner on 8086 -- its OWN port -- which came
+		straight back as self-echo while the joiner heard nothing. Measured: 19
+		requests in, 1 reply out, and that reply to the wrong endpoint.
+	*/
+	if ((ip == 0) || (port == 0) || ((ip == m_localIP) && (port == m_lobbyPort)))
 		return;
 
 	Int firstFree = -1;
@@ -176,6 +201,52 @@ UnsignedShort LANAPI::peerPort(UnsignedInt ip) const
 		}
 	}
 	return LAN_LOBBY_PORT_DEFAULT;
+}
+
+/*	See LANAPI.h for why this exists. Two passes on purpose. */
+Int LANAPI::slotForSender(UnsignedInt senderIP) const
+{
+	if ((m_currentGame == nullptr) || (senderIP == 0))
+		return -1;
+
+	/*	Pass 1: address AND port. This is the answer whenever the peers have
+		told us their ports, and it is the only pass that can tell two
+		instances on one address apart. */
+	if (m_senderPort != 0)
+	{
+		for (Int player = 0; player < MAX_SLOTS; ++player)
+		{
+			if (m_currentGame->getIP(player) != senderIP)
+				continue;
+			const GameSlot *slot = m_currentGame->getConstSlot(player);
+			if (slot == nullptr)
+				continue;
+			const UnsignedShort slotGamePort = slot->getPort();
+			if ((slotGamePort != 0) &&
+					(LANLobbyPortFromGamePort(slotGamePort) == m_senderPort))
+				return player;
+		}
+	}
+
+	/*	Pass 2: address alone, accepting only a slot that has NOT declared a
+		port. A retail peer looks exactly like this, so it still resolves; a
+		co-located peer never does, because its port is known and so it was
+		either matched in pass 1 or is genuinely not this sender.
+
+		Deliberately NOT a plain address scan: falling back to one would undo
+		the whole fix, because the first slot sharing the address would win
+		again and that is precisely the bug. Better to return -1 and drop a
+		message than to act on the wrong player. */
+	for (Int player = 0; player < MAX_SLOTS; ++player)
+	{
+		if (m_currentGame->getIP(player) != senderIP)
+			continue;
+		const GameSlot *slot = m_currentGame->getConstSlot(player);
+		if ((slot != nullptr) && (slot->getPort() == 0))
+			return player;
+	}
+
+	return -1;
 }
 
 LANAPI::~LANAPI()
@@ -278,6 +349,7 @@ void LANAPI::reset()
 		m_lobbyPort is OURS and deliberately survives: it came from the command
 		line, and reset() must not silently move the socket we are bound to.
 	*/
+	m_senderPort = 0;
 	for (Int p = 0; p < MAX_PEER_PORTS; ++p)
 	{
 		m_peerPorts[p].ip = 0;
@@ -304,6 +376,25 @@ void LANAPI::broadcastMessage(UnsignedInt dst, LANMessage *msg)
 	m_transport->queueSend(dst, LAN_LOBBY_PORT_DEFAULT, (unsigned char *)msg, sizeof(LANMessage));
 	if (m_lobbyPort != LAN_LOBBY_PORT_DEFAULT)
 		m_transport->queueSend(dst, m_lobbyPort, (unsigned char *)msg, sizeof(LANMessage));
+}
+
+/*	Reply to the peer whose packet is being handled. See the declaration for why
+	this exists rather than sendMessage(msg, senderIP).
+
+	m_senderPort is only meaningful inside a handler, so fall back to the learned
+	table if this is somehow called outside one -- that is the old behaviour, and
+	it is correct whenever the peer is not co-located.
+*/
+void LANAPI::replyToSender(LANMessage *msg, UnsignedInt senderIP)
+{
+	if (senderIP == 0)
+		return;
+
+	const UnsignedShort dstPort = (m_senderPort != 0) ? m_senderPort : peerPort(senderIP);
+	const Bool queued = m_transport->queueSend(senderIP, dstPort, (unsigned char *)msg, sizeof(LANMessage));
+	DEBUG_LOG(("LANAPI::replyToSender - type=%s dst=%d.%d.%d.%d:%d queued=%d",
+		GetMessageTypeString(msg->messageType).str(), PRINTF_IP_AS_4_INTS(senderIP), dstPort, queued));
+	(void)queued;
 }
 
 void LANAPI::sendMessage(LANMessage *msg, UnsignedInt ip /* = 0 */)
@@ -341,12 +432,29 @@ void LANAPI::sendMessage(LANMessage *msg, UnsignedInt ip /* = 0 */)
 			if (i != localSlot) {
 				GameSlot *slot = m_currentGame->getSlot(i);
 				if ((slot != nullptr) && (slot->isHuman())) {
+					/*	TheSuperHackers @bugfix take the port from the SLOT, not from
+						peerPort(). Same reasoning as the fan-out further down, and
+						the same one-line change: the peer-port table is keyed by
+						address alone, so for several instances behind ONE address --
+						six bots on a single NIC, which is the whole point of this
+						work -- it holds a single port and every send in this loop
+						goes to it. One bot receives the packet and the rest hear
+						nothing, silently.
+
+						The slot carries that peer's GAMEPLAY port;
+						LANLobbyPortFromGamePort inverts it to the lobby port LANAPI
+						traffic must reach. A slot with no port yet falls back to the
+						old behaviour, which is right for a retail peer. */
+					const UnsignedShort slotGamePort = slot->getPort();
+					const UnsignedShort dstPortTo = (slotGamePort != 0)
+						? LANLobbyPortFromGamePort(slotGamePort)
+						: peerPort(slot->getIP());
 					// GeneralsX @build GitHubCopilot 11/04/2026 Instrument direct-connect fan-out sends.
-					Bool queued = m_transport->queueSend(slot->getIP(), peerPort(slot->getIP()), (unsigned char *)msg, sizeof(LANMessage) /*, 0, 0 */);
+					Bool queued = m_transport->queueSend(slot->getIP(), dstPortTo, (unsigned char *)msg, sizeof(LANMessage) /*, 0, 0 */);
 					sentAny = TRUE;
 					(void)queued;
 					/* 					fprintf(stderr, "[LAN86] send directed-fanout type=%s dst=%d.%d.%d.%d:%d queued=%d\n",
-						GetMessageTypeString(msg->messageType).str(), PRINTF_IP_AS_4_INTS(slot->getIP()), peerPort(slot->getIP()), queued);
+						GetMessageTypeString(msg->messageType).str(), PRINTF_IP_AS_4_INTS(slot->getIP()), dstPortTo, queued);
 					fflush(stderr); */
 				}
 			}
@@ -398,7 +506,7 @@ void LANAPI::sendMessage(LANMessage *msg, UnsignedInt ip /* = 0 */)
 
 			Duplicates are harmless: every handler here is idempotent (a
 			repeated slot list parses to the same thing, and the sender
-			ignores its own packets via the senderIP == m_localIP test).
+			ignores its own packets via isFromSelf()).
 		*/
 		if (m_currentGame != nullptr)
 		{
@@ -411,8 +519,34 @@ void LANAPI::sendMessage(LANMessage *msg, UnsignedInt ip /* = 0 */)
 				if (slot == nullptr || !slot->isHuman())
 					continue;
 				const UnsignedInt ipTo = m_currentGame->getIP(i);
-				if (ipTo != 0 && ipTo != m_localIP)
-					m_transport->queueSend(ipTo, peerPort(ipTo), (unsigned char *)msg, sizeof(LANMessage) /*, 0, 0 */);
+				if (ipTo == 0)
+					continue;
+				/*	TheSuperHackers @bugfix take the port from the SLOT, and do not
+					skip peers that share our address.
+
+					Two changes, one cause. The old code skipped `ipTo ==
+					m_localIP`, which threw away every co-located peer -- precisely
+					the case this fan-out exists to serve, since a broadcast is
+					what fails to reach them. And it asked peerPort(ipTo), a table
+					keyed by address alone, which cannot tell two instances on one
+					address apart even when it does hold an entry.
+
+					The slot is the per-peer record that survives both problems: it
+					carries that peer's GAMEPLAY port, and LANLobbyPortFromGamePort
+					inverts it to the lobby port this message must reach. A slot we
+					are only browsing may still be unfilled, so fall back to the
+					learned table when the slot has no port yet.
+
+					localSlot is skipped above, so this cannot send to ourselves;
+					the port test here is belt-and-braces for a game whose local
+					slot we failed to identify. */
+				const UnsignedShort slotGamePort = slot->getPort();
+				const UnsignedShort portTo = (slotGamePort != 0)
+					? LANLobbyPortFromGamePort(slotGamePort)
+					: peerPort(ipTo);
+				if ((ipTo == m_localIP) && (portTo == m_lobbyPort))
+					continue;					// genuinely us, by address AND port
+				m_transport->queueSend(ipTo, portTo, (unsigned char *)msg, sizeof(LANMessage) /*, 0, 0 */);
 			}
 		}
 	}
@@ -573,7 +707,31 @@ void LANAPI::update()
 		{
 			// Process the new message
 			UnsignedInt senderIP = m_transport->m_inBuffer[i].addr;
-			if (senderIP == m_localIP)
+			/*	Park the source port first: everything below -- the self-echo test,
+				notePeerPort and the handlers -- identifies this peer by
+				(address, port). See the m_senderPort declaration. */
+			m_senderPort = m_transport->m_inBuffer[i].port;
+			/*	TheSuperHackers @bugfix Self-echo is same ADDRESS AND same PORT.
+
+				This used to test the address alone, which is wrong on POSIX and
+				is what stopped two engines on one machine ever completing a join.
+				The lobby socket must bind INADDR_ANY to receive broadcasts at
+				all, and an unbound source means the KERNEL picks the source
+				address: for a loopback destination it picks 127.0.0.1 whatever
+				localIP was configured. So a joiner at 127.0.0.2 arrives claiming
+				127.0.0.1, the host matches its own address, and discards every
+				join request as its own echo. Measured: 27 sent, 27 dropped.
+
+				Comparing the port as well distinguishes them, because each
+				instance now owns a distinct lobby port -- the same fact that
+				makes per-instance gameplay ports work. Transport.cpp has always
+				recorded the source port; only the address was being consulted.
+
+				Strictly more correct for retail too: our own echo necessarily
+				carries our own port, so a stock single-instance host still drops
+				exactly what it dropped before.
+			*/
+			if (isFromSelf(senderIP))
 			{
 				/* 				fprintf(stderr, "[LAN86] recv self-echo type=%u (%s) from %d.%d.%d.%d ignored\n",
 					((LANMessage *)(m_transport->m_inBuffer[i].data))->messageType,
@@ -600,13 +758,6 @@ void LANAPI::update()
 				GetMessageTypeString(msg->messageType).str(), msg->messageType, m_transport->m_inBuffer[i].length,
 				PRINTF_IP_AS_4_INTS(senderIP), PRINTF_IP_AS_4_INTS(m_localIP));
 			fflush(stderr); */
-			if (TheShell == nullptr)
-			{
-				printf("JOINTRACE: recv type=%d from %d.%d.%d.%d (pending=%d inLobby=%d)\n",
-					(int)msg->messageType, PRINTF_IP_AS_4_INTS(senderIP),
-					(int)m_pendingAction, (int)m_inLobby);
-				fflush(stdout);
-			}
 			//DEBUG_LOG(("LAN message type %s from %ls (%s@%s)", GetMessageTypeString(msg->messageType).str(),
 			//	msg->name, msg->userName, msg->hostName));
 			switch (msg->messageType)
@@ -982,7 +1133,7 @@ void LANAPI::RequestGameLeave()
 	sendMessage(&msg);
 	m_transport->update();  // Send immediately, before OnPlayerLeave below resets everything.
 
-	if (m_currentGame && m_currentGame->getIP(0) == m_localIP)
+	if (AmIHost())
 	{
 		// Exit out immediately if we're hosting
 		OnPlayerLeave(m_name);
@@ -1002,7 +1153,7 @@ void LANAPI::RequestGameAnnounce()
 	// In game - are we a game host?
 	if (m_currentGame && !(m_currentGame->getIsDirectConnect()))
 	{
-		if (m_currentGame->getIP(0) == m_localIP || (m_currentGame->isGameInProgress() && TheNetwork && TheNetwork->isPacketRouter())) // if we're in game we should reply if we're the packet router
+		if (AmIHost() || (m_currentGame->isGameInProgress() && TheNetwork && TheNetwork->isPacketRouter())) // if we're in game we should reply if we're the packet router
 		{
 			AsciiString gameOpts = GameInfoToAsciiString(m_currentGame);
 			if (gameOpts.isEmpty())
@@ -1110,7 +1261,7 @@ void LANAPI::RequestChat( UnicodeString message, ChatType format )
 
 void LANAPI::RequestGameStart()
 {
-	if (m_inLobby || !m_currentGame || m_currentGame->getIP(0) != m_localIP)
+	if (m_inLobby || !AmIHost())
 		return;
 
 	LANMessage msg;
@@ -1130,7 +1281,7 @@ void LANAPI::ResetGameStartTimer()
 
 void LANAPI::RequestGameStartTimer( Int seconds )
 {
-	if (m_inLobby || !m_currentGame || m_currentGame->getIP(0) != m_localIP)
+	if (m_inLobby || !AmIHost())
 		return;
 
 	UnsignedInt now = timeGetTime();
@@ -1221,7 +1372,11 @@ void LANAPI::RequestGameCreate( UnicodeString gameName, Bool isDirectConnect )
 	LANGameSlot newSlot;
 	newSlot.setState(SLOT_PLAYER, m_name);
 	newSlot.setIP(m_localIP);
-	newSlot.setPort(NETWORK_BASE_PORT_NUMBER); // LAN game, everyone has a unique IP, so it's ok to use the same port.
+	/*	TheSuperHackers @feature the original comment here read "LAN game, everyone
+		has a unique IP, so it's ok to use the same port", which is the assumption
+		that stopped two engines sharing a machine. This is OUR slot, so advertise
+		the port we will actually bind. Unchanged at 8088 for a default instance. */
+	newSlot.setPort(GetGamePort());
 	newSlot.setLastHeard(0);
 	newSlot.setLogin(m_userName);
 	newSlot.setHost(m_hostName);
@@ -1453,7 +1608,12 @@ LANGameInfo* LANAPI::LookupGameByHost(UnsignedInt hostIP)
 void LANAPI::removeGame( LANGameInfo *game )
 {
 	LANGameInfo *g = m_games;
-	if (!game)
+	/*	TheSuperHackers @bugfix also return when the LIST is empty, not just when
+		the argument is null. The original guard tested `game` alone and the walk
+		below then dereferenced g == m_games == NULL. Reachable whenever a
+		game-leave arrives while we hold no games -- which a mis-set AmIHost()
+		did by synthesising one for IP 0 -- and it is a straight SIGSEGV. */
+	if (!game || !g)
 	{
 		return;
 	}
@@ -1612,7 +1772,37 @@ void LANAPI::SetLocalIP( AsciiString localIP )
 
 Bool LANAPI::AmIHost()
 {
-	return m_currentGame && m_currentGame->getIP(0) == m_localIP;
+	/*	TheSuperHackers @bugfix identity is (address, port), not address alone.
+
+		Slot 0 is the host. Comparing only the address made every co-located
+		instance believe it was the host, because on POSIX they can share one
+		address (the lobby socket binds INADDR_ANY, so the kernel stamps the
+		source -- see the self-echo filter in update()). Two "hosts" in one game
+		is not a cosmetic problem: the host takes the !AmIHost() "host is not
+		responding" branch, synthesises a game-leave for slot 0 with IP 0, and
+		removeGame() then walks a NULL m_games and dies. That crash is how this
+		was found.
+
+		Slot 0 carries the host's GAMEPLAY port, so compare against ours rather
+		than against m_lobbyPort. For a default instance this is 8088 == 8088 and
+		the result is identical to the old address-only test.
+	*/
+	if (m_currentGame == nullptr)
+		return FALSE;
+	/*	The address comparison is spelled out here rather than delegated: THIS is
+		the host test the rest of the file now calls, so anything recursive here
+		is an instant stack overflow. It was, once -- a blind search-and-replace
+		turned this very line into a call to itself. */
+	if (m_currentGame->getIP(0) != m_localIP)
+		return FALSE;
+
+	/*	A slot 0 port of 0 means nobody has filled it in yet -- an announce we
+		have not parsed, or our own game before setSlot. Fall back to the address
+		match so this stays conservative rather than newly claiming FALSE. */
+	const UnsignedShort hostSlotPort = m_currentGame->getSlot(0) ? m_currentGame->getSlot(0)->getPort() : 0;
+	if (hostSlotPort == 0)
+		return TRUE;
+	return hostSlotPort == GetGamePort();
 }
 
 void LANAPI::setIsActive(Bool isActive) {

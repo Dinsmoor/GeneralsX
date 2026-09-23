@@ -113,20 +113,21 @@ void LANAPI::OnAccept( UnsignedInt playerIP, Bool status )
 {
 	if( AmIHost() )
 	{
-		Int i = 0;
-		for (; i < MAX_SLOTS; i++)
+		/*	slotForSender, not a scan for the first slot whose address matches:
+			with several instances on one machine every player shares an
+			address, so that scan returns slot 0 -- the host -- for everyone.
+			The host then acknowledged a joiner's "ready" by marking ITSELF
+			ready and sat waiting for a player it had already counted.
+			m_senderPort is still live here, because the callback runs
+			synchronously inside the handler that set it. */
+		const Int i = slotForSender(playerIP);
+		if (i >= 0)
 		{
-			if (m_currentGame->getIP(i) == playerIP)
-			{
-				if(status)
-					m_currentGame->getLANSlot(i)->setAccept();
-				else
-					m_currentGame->getLANSlot(i)->unAccept();
-				break;
-			}
-		}
-		if (i != MAX_SLOTS )
-		{
+			if(status)
+				m_currentGame->getLANSlot(i)->setAccept();
+			else
+				m_currentGame->getLANSlot(i)->unAccept();
+
 			RequestGameOptions( GenerateGameOptionsString(), false );
 			lanUpdateSlotList();
 		}
@@ -147,17 +148,13 @@ void LANAPI::OnHasMap( UnsignedInt playerIP, Bool status )
 {
 	if( AmIHost() )
 	{
-		Int i = 0;
-		for (; i < MAX_SLOTS; i++)
+		// Same reason as OnAccept: address alone cannot tell co-located
+		// players apart, and would credit slot 0 with everyone's map.
+		const Int i = slotForSender(playerIP);
+		if (i >= 0)
 		{
-			if (m_currentGame->getIP(i) == playerIP)
-			{
-				m_currentGame->getLANSlot(i)->setMapAvailability( status );
-				break;
-			}
-		}
-		if (i != MAX_SLOTS )
-		{
+			m_currentGame->getLANSlot(i)->setMapAvailability( status );
+
 			UnicodeString mapDisplayName;
 			const MapMetaData *mapData = TheMapCache->findMap( m_currentGame->getMap() );
 			Bool willTransfer = TRUE;
@@ -230,7 +227,12 @@ void LANAPI::OnGameStart()
 		// Time to initialize TheNetwork for this game.
 		TheNetwork = NetworkInterface::createNetwork();
 		TheNetwork->init();
-		TheNetwork->setLocalAddress(m_localIP, 8088);
+		/*	TheSuperHackers @feature was the bare literal 8088. Derived from our
+			lobby port so that the host, which cannot be told this port over the
+			frozen wire format, computes the same value for us that we bind here.
+			A default instance has m_lobbyPort == 8086 and so binds 8088, exactly
+			as before. */
+		TheNetwork->setLocalAddress(m_localIP, GetGamePort());
 		TheNetwork->initTransport();
 
 		TheNetwork->parseUserList(m_currentGame);
@@ -297,10 +299,19 @@ void LANAPI::OnGameOptions( UnsignedInt playerIP, Int playerSlot, AsciiString op
 			lanUpdateSlotList();
 			updateGameOptions();
 		}
+		/*	TheSuperHackers @bugfix "am I still in the slot list?" by (address, port).
+
+			An address-only scan let a co-located sibling's slot answer for us: six
+			bots on one machine all share an address, so a bot that really had been
+			booted would find a brother in the list and conclude it was still
+			seated. isLocalPlayer() compares the slot's port too, which is what
+			makes the answer per-instance.
+		*/
 		Bool booted = true;
 		for(Int player = 1; player< MAX_SLOTS; player++)
 		{
-			if(m_currentGame->getIP(player) == m_localIP)
+			const LANGameSlot *slot = m_currentGame->getConstLANSlot(player);
+			if(slot != nullptr && slot->isLocalPlayer())
 			{
 				booted = false;
 				break;
@@ -340,7 +351,14 @@ void LANAPI::OnGameOptions( UnsignedInt playerIP, Int playerSlot, AsciiString op
 		}
 
 		// Parse player requests (side, color, etc)
-		if( AmIHost() && m_localIP != playerIP)
+		/*	TheSuperHackers @bugfix exclude our own SLOT, not our own address.
+
+			This is the host applying a joiner's request. Testing the address made
+			the host ignore requests from any co-located joiner -- six bots on one
+			machine would all be filtered out as "that is me" -- while the intent
+			is only to skip a request we sent ourselves. getLocalSlotNum() is now
+			(address, port) aware, so the slot number is the exact test. */
+		if( AmIHost() && playerSlot != m_currentGame->getLocalSlotNum())
 		{
 			if (options.compare("HELLO") == 0)
 			{
@@ -503,7 +521,7 @@ void LANAPI::OnSlotList( ReturnType ret, LANGameInfo *theGame )
 */
 void LANAPI::OnPlayerJoin( Int slot, UnicodeString playerName )
 {
-	if (m_currentGame && m_currentGame->getIP(0) == m_localIP)
+	if (AmIHost())
 	{
 		// Someone New Joined.. lets reset the accepts
 		m_currentGame->resetAccepted();
@@ -608,7 +626,7 @@ void LANAPI::OnPlayerLeave( UnicodeString player )
 	}
 	else
 	{
-		if (m_currentGame && m_currentGame->getIP(0) == m_localIP)
+		if (AmIHost())
 		{
 			// Force a new slotlist send
 			m_lastResendTime = 0;

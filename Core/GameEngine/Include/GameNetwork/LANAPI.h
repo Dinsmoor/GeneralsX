@@ -355,6 +355,16 @@ public:
 	virtual LANGameInfo* GetMyGame() override { return m_currentGame; }					      ///< What's my Game?
 	virtual UnsignedInt GetLocalIP() { return m_localIP; }								///< What's my IP?
 	virtual UnsignedShort GetLobbyPort() { return m_lobbyPort; }					///< What port is our lobby on?
+	/*	What gameplay port do we listen on, and what does a peer listen on?
+
+		Both are derived from a lobby port rather than configured separately,
+		because the host has to be able to work a joiner's gameplay port out for
+		itself -- see LANGamePortFromLobbyPort in NetworkDefs.h for why the wire
+		format leaves it no other choice.
+	*/
+	virtual UnsignedShort GetGamePort() { return LANGamePortFromLobbyPort(m_lobbyPort); }
+	virtual UnsignedShort GetPeerLobbyPort( UnsignedInt ip ) { return peerPort(ip); }
+	virtual UnsignedShort GetPeerGamePort( UnsignedInt ip ) { return LANGamePortFromLobbyPort(peerPort(ip)); }
 	/*	Tell us a peer's lobby port before it has said anything.
 
 		Everything else about the peer port table is learned from inbound
@@ -446,6 +456,74 @@ protected:
 	};
 	PeerPort						m_peerPorts[MAX_PEER_PORTS];
 
+	/*	The source port of the packet currently being dispatched, parked by
+		update() immediately before the handler switch. Only meaningful inside a
+		handler call; 0 elsewhere. It exists so a handler can identify its peer by
+		(address, port) without all sixteen handler signatures having to change.
+	*/
+	UnsignedShort				m_senderPort;
+
+	/*	Is the packet being handled one of OUR OWN?
+
+		The test every handler wants in place of `senderIP == m_localIP`, which is
+		wrong wherever instances share an address: on POSIX the lobby socket binds
+		INADDR_ANY (it must, to receive broadcasts), so the kernel stamps its own
+		choice of source address and a co-located peer's packets arrive claiming
+		our address. Only the port then separates us from them.
+	*/
+	Bool isFromSelf(UnsignedInt senderIP) const
+	{
+		return (senderIP == m_localIP) && (m_senderPort == m_lobbyPort);
+	}
+
+	/*	Is an address the host has named for US one of ours?
+
+		For a JOIN_ACCEPT, which carries the address the HOST observed rather
+		than the one we bound. Those differ whenever we are reached over
+		loopback: we bind 127.0.0.2, the kernel picks 127.0.0.1 as the source of
+		what we send, and the host faithfully echoes back the 127.0.0.1 it saw.
+		A plain `== m_localIP` then rejects our own accept, so the join retries
+		for ever while the host already counts us as present. That was the
+		symptom: "2/2 present, 1 ready" on the host, "no answer" on the joiner.
+
+		Widened ONLY for loopback, and the wire format is untouched -- on a real
+		NIC this is exactly the old comparison, so a retail host and a retail
+		joiner behave byte for byte as before.
+
+		It is safe to be this loose because the accept is UNICAST to us and
+		RequestGameJoin permits one outstanding join at a time (anything but
+		ACT_NONE/ACT_JOINDIRECTCONNECT gets RET_BUSY), and every caller
+		additionally requires m_pendingAction == ACT_JOIN and clears it. An
+		accept naming a loopback address, arriving while we are mid-join, cannot
+		belong to anyone else.
+	*/
+	Bool isAddressedToSelf(UnsignedInt addr) const
+	{
+		if (addr == m_localIP)
+			return TRUE;
+		// 127.0.0.0/8 on BOTH sides, i.e. a co-located peer over loopback.
+		return ((addr >> 24) == 127) && ((m_localIP >> 24) == 127);
+	}
+
+	/*	Which slot of m_currentGame did the packet being handled come from?
+
+		Returns -1 for none. Replaces the `getIP(player) == senderIP` scan that
+		five handlers each spelled out (leave, accept, hasMap, chat,
+		gameOptions). That scan takes the FIRST slot with a matching address and
+		breaks, so when two players share one -- which is the whole point of
+		running several instances on one machine -- every one of them resolves
+		to the lowest-numbered slot, normally the host. The symptom was a host
+		that answered its joiner's "ready" by marking ITSELF ready and then
+		waited for a player who, as far as it could tell, had already been
+		counted.
+
+		Slots carry the GAMEPLAY port while a packet arrives from a LOBBY port,
+		so the two are compared through LANLobbyPortFromGamePort(). A slot with
+		port 0 has not told us its port yet and matches on address alone, which
+		is what a retail peer looks like -- so retail behaviour is unchanged.
+	*/
+	Int slotForSender(UnsignedInt senderIP) const;
+
 	/// Remember (or update) the port a peer was last heard from on.
 	void notePeerPort(UnsignedInt ip, UnsignedShort port);
 	/// The port to send to for this peer -- its learned port, else the default.
@@ -455,6 +533,19 @@ protected:
 
 protected:
 	void sendMessage(LANMessage *msg, UnsignedInt ip = 0); // Convenience function
+	/*	Reply to the peer whose packet we are handling right now.
+
+		sendMessage(msg, ip) has to ask peerPort(ip) which port to use, and that
+		table is keyed by address alone -- so for a co-located peer, whose packets
+		arrive claiming OUR address, it cannot find the right port and falls back
+		to the default, which is our own. The reply then goes to ourselves.
+
+		A handler does not need the table: the source port of the packet it is
+		handling is already known (m_senderPort). Use this for any reply to the
+		sender, and sendMessage(msg, ip) only when addressing a peer we are not
+		currently handling a packet from.
+	*/
+	void replyToSender(LANMessage *msg, UnsignedInt senderIP);
 	void removePlayer(LANPlayer *player);
 	void removeGame(LANGameInfo *game);
 	void addPlayer(LANPlayer *player);
