@@ -60,6 +60,7 @@
 #include <winsock2.h>
 #else
 #include "socket_compat.h"
+#include <netinet/tcp.h>	// TCP_NODELAY; socket_compat.h does not pull this in
 #endif
 
 ObservationServer *TheObservationServer = nullptr;

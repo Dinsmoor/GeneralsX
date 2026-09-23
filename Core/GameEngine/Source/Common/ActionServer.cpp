@@ -47,6 +47,7 @@
 #include <winsock2.h>
 #else
 #include "socket_compat.h"
+#include <netinet/tcp.h>	// TCP_NODELAY; socket_compat.h does not pull this in
 #endif
 
 /*	Chat goes out through a helper in ConnectionManager.cpp.
@@ -1872,7 +1873,10 @@ void ActionServer::executeLine( const char *line )
 				// greyed-out cameo's tooltip shows.
 				if (!can)
 				{
-					AsciiString requires;
+					// Not named "requires": that is a keyword in C++20, which is
+					// what GeneralsX compiles with. The JSON key below is the
+					// bot's wire format and stays as it is.
+					AsciiString requiresList;
 					Int p;
 					for (p = 0; p < tmpl->getPrereqCount(); p++)
 					{
@@ -1884,13 +1888,13 @@ void ActionServer::executeLine( const char *line )
 						one.translate(pre->getRequiresList(player));
 						if (one.isEmpty())
 							continue;
-						if (!requires.isEmpty())
-							requires.concat(", ");
-						requires.concat(one);
+						if (!requiresList.isEmpty())
+							requiresList.concat(", ");
+						requiresList.concat(one);
 					}
 
 					body.append(",\"requires\":\"");
-					appendEscaped(body, requires.str());
+					appendEscaped(body, requiresList.str());
 					body.append("\"");
 				}
 			}
