@@ -549,11 +549,13 @@ void LANAPI::handleJoinAccept( LANMessage *msg, UnsignedInt senderIP )
 		m_pendingAction, msg->GameJoined.slotPosition, GetWindowsWideCharAsWchar(msg->GameJoined.gameName)); */
 	if (TheShell == nullptr)
 	{
-		AsciiString gn; gn.translate(UnicodeString(msg->GameJoined.gameName));
+		// gameName is WideCharWindows here, not wchar_t: go through the same
+		// conversion helper the rest of this file uses.
+		AsciiString gn; gn.translate(UnicodeString(GetWindowsWideCharAsWchar(msg->GameJoined.gameName)));
 		printf("JOINTRACE: JOIN_ACCEPT for %d.%d.%d.%d (mine %d.%d.%d.%d) pending=%d game='%s' lookup=%p\n",
 			PRINTF_IP_AS_4_INTS(msg->GameJoined.playerIP),
 			PRINTF_IP_AS_4_INTS(m_localIP), (int)m_pendingAction, gn.str(),
-			(void*)LookupGame(UnicodeString(msg->GameJoined.gameName)));
+			(void*)LookupGame(UnicodeString(GetWindowsWideCharAsWchar(msg->GameJoined.gameName))));
 		fflush(stdout);
 	}
 	if (msg->GameJoined.playerIP == m_localIP) // Is it for us?
