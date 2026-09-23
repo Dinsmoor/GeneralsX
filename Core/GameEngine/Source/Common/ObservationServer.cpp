@@ -48,7 +48,19 @@
 #include "GameLogic/Module/SupplyWarehouseDockUpdate.h"
 #include <string>
 
+/*	GeneralsX @build Keep winsock2 on Windows; use the shim elsewhere.
+
+	This file was written when the engine only ever ran under Wine, so it
+	included <winsock2.h> unconditionally. GeneralsX ships a Winsock -> POSIX
+	BSD layer that supplies every symbol used below (SOCKET, INVALID_SOCKET,
+	SOCKET_ERROR, closesocket, ioctlsocket, WSAStartup, WSACleanup,
+	WSAGetLastError), so the socket code itself is unchanged.
+*/
+#ifdef _WIN32
 #include <winsock2.h>
+#else
+#include "socket_compat.h"
+#endif
 
 ObservationServer *TheObservationServer = nullptr;
 

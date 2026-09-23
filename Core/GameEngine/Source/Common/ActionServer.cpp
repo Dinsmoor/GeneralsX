@@ -35,7 +35,19 @@
 
 #include <string>
 #include <vector>
+
+/*	GeneralsX @build Keep winsock2 on Windows; use the shim elsewhere.
+
+	See the note below on why this file talks to its own socket directly
+	rather than including NetworkInterface.h. GeneralsX ships a Winsock ->
+	POSIX BSD layer that supplies every symbol used here, so the socket code
+	itself is unchanged.
+*/
+#ifdef _WIN32
 #include <winsock2.h>
+#else
+#include "socket_compat.h"
+#endif
 
 /*	Chat goes out through a helper in ConnectionManager.cpp.
 
