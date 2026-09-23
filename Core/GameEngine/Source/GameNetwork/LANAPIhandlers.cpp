@@ -499,8 +499,25 @@ void LANAPI::handleRequestJoin( LANMessage *msg, UnsignedInt senderIP )
 						one machine be told apart by everyone in the game.
 
 						A stock client joins from lobby 8086, so this yields 8088 and
-						the slot is byte-identical to what the original code wrote. */
-					newSlot.setPort(GetPeerGamePort(senderIP));
+						the slot is byte-identical to what the original code wrote.
+
+						Take it from m_senderPort, NOT from GetPeerGamePort(senderIP).
+						That helper reads m_peerPorts, which is keyed by ADDRESS
+						ALONE and therefore holds one entry per address: two
+						co-located joiners overwrite each other there, so both
+						slots were given whichever port wrote last. Both then
+						resolved to the same slot in slotForSender(), one joiner's
+						HELLO stamped the other's lastHeard, and the starved slot
+						was dropped after 80s as "player was not responding" --
+						having joined perfectly well.
+
+						m_senderPort is the source port of the datagram being
+						handled right now, so it is exact and cannot collide.
+						Fall back to the table only if it is somehow unset, which
+						keeps the retail path identical. */
+					const UnsignedShort joinerLobbyPort =
+						(m_senderPort != 0) ? m_senderPort : peerPort(senderIP);
+					newSlot.setPort(LANGamePortFromLobbyPort(joinerLobbyPort));
 					newSlot.setLastHeard(timeGetTime());
 					newSlot.setSerial(msg->GameToJoin.serial);
 					m_currentGame->setSlot(player,newSlot);

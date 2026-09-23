@@ -1315,15 +1315,18 @@ void LANAPI::RequestGameOptions( AsciiString gameOptions, Bool isPublic, Unsigne
 
 	m_lastGameopt = gameOptions;
 
-	int player;
-	for (player = 0; player<MAX_SLOTS; ++player)
-	{
-		if (m_currentGame->getIP(player) == m_localIP)
-		{
-			OnGameOptions(m_localIP, player, AsciiString(msg.GameOptions.options));
-			break;
-		}
-	}
+	/*	TheSuperHackers @bugfix echo to OUR SLOT, not to the first slot sharing
+		our address.
+
+		This is the local echo of a request we just sent, so the target is our
+		own slot. Scanning for the first matching address picks the
+		lowest-numbered co-located instance instead -- with several bots on one
+		machine, one bot applied its own options to another bot's slot locally
+		and then disagreed with the host about its own state.
+		getLocalSlotNum() is (address, port) aware, so it is the exact answer. */
+	const Int player = m_currentGame->getLocalSlotNum();
+	if (player >= 0)
+		OnGameOptions(m_localIP, player, AsciiString(msg.GameOptions.options));
 
 	// We can request game options (side, color, etc) while we don't have a slot yet.  Of course, we don't need to
 	// call OnGameOptions for those, so it's okay to silently fail.
