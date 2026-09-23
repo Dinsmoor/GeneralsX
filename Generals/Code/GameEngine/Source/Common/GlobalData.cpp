@@ -665,6 +665,7 @@ GlobalData::GlobalData()
 	m_botHostLanLobby = FALSE;
 	m_lobbyScript.clear();
 	m_netLocalIP.clear();
+	m_netLobbyPort = 0;
 	m_botFaction.clear();
 	m_windowed = 0;
 	m_xResolution = DEFAULT_DISPLAY_WIDTH;

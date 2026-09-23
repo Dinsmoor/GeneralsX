@@ -354,6 +354,17 @@ public:
 	virtual UnicodeString GetMyName() override { return m_name; }                 ///< What's my name?
 	virtual LANGameInfo* GetMyGame() override { return m_currentGame; }					      ///< What's my Game?
 	virtual UnsignedInt GetLocalIP() { return m_localIP; }								///< What's my IP?
+	virtual UnsignedShort GetLobbyPort() { return m_lobbyPort; }					///< What port is our lobby on?
+	/*	Tell us a peer's lobby port before it has said anything.
+
+		Everything else about the peer port table is learned from inbound
+		packets, which is enough for discovery: a host's announce teaches us
+		its port before we ever answer it. Direct connect has no such packet
+		-- we unicast the very first datagram to an address a human typed --
+		so if that host is on a non-default port, the address alone is not
+		enough to reach it. This is how "host = 10.0.0.5:8087" gets honoured.
+	*/
+	virtual void SetPeerPort( UnsignedInt ip, UnsignedShort port ) { notePeerPort(ip, port); }
 	virtual void fillInLANMessage( LANMessage *msg ) override;																	///< Fill in default params
 	virtual void checkMOTD() override;
 protected:
@@ -399,6 +410,48 @@ protected:
 	AsciiString					m_lastGameopt; /// @todo: hack for demo - remove this
 
 	Bool								m_isActive;			///< is the game currently active?
+
+	/*	TheSuperHackers @feature the lobby port is no longer a constant.
+
+		Retail LANAPI hardcoded UDP 8086 on the reasoning quoted in
+		LANAPI.cpp: "LAN game, everyone has a unique IP, so it's ok to use
+		the same port." That holds on Windows, where the transport binds the
+		specific local address, so two engines on one box can coexist on
+		distinct addresses. It does NOT hold on POSIX, where we bind
+		INADDR_ANY in order to receive broadcasts at all (a specifically
+		bound UDP socket receives unicast ONLY -- a directed or global
+		broadcast to it is dropped, and the sender's sendto() still
+		succeeds, so the failure is silent). With a wildcard bind the PORT,
+		not the address, is what collides, and the second engine's
+		Transport::init() fails.
+
+		So make the port a variable and answer each peer where its packets
+		came from, the way most multiplayer games do. m_lobbyPort is the
+		port WE bind and announce; m_peerPorts remembers the source port of
+		every peer we have heard from, so later sends reach them too and not
+		just an immediate reply. A peer we have never heard from is assumed
+		to be on the default port, which is what a stock client listens on
+		-- so a non-default port here stays wire-compatible with retail.
+
+		Internet play is unaffected: it goes through GameSpy/NAT, which
+		already rewrites ports, and direct-connect over the internet needs
+		a forwarded port either way.
+	*/
+	UnsignedShort				m_lobbyPort;					///< the UDP port we bind and announce
+	enum { MAX_PEER_PORTS = MAX_SLOTS * 2 };
+	struct PeerPort
+	{
+		UnsignedInt			ip;										///< host byte order; 0 means "slot unused"
+		UnsignedShort		port;
+	};
+	PeerPort						m_peerPorts[MAX_PEER_PORTS];
+
+	/// Remember (or update) the port a peer was last heard from on.
+	void notePeerPort(UnsignedInt ip, UnsignedShort port);
+	/// The port to send to for this peer -- its learned port, else the default.
+	UnsignedShort peerPort(UnsignedInt ip) const;
+	/// Send to a broadcast address on every port a peer could be listening on.
+	void broadcastMessage(UnsignedInt dst, LANMessage *msg);
 
 protected:
 	void sendMessage(LANMessage *msg, UnsignedInt ip = 0); // Convenience function

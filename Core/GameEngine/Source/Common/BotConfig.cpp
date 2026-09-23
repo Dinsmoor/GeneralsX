@@ -199,6 +199,32 @@ Bool BotConfig::load( const AsciiString& fname )
 		gd->m_botJoinName = s;
 	if (getString(prefs, "localIP", &s))
 		gd->m_netLocalIP = s;
+
+	/*	Which UDP port the LAN lobby binds. Omit it for retail behaviour.
+
+		localIP above is enough to run two engines on one Windows box, because
+		the lobby socket binds that specific address there. On POSIX the socket
+		must bind INADDR_ANY to receive broadcasts at all, so the PORT is what
+		collides and the second engine cannot bind 8086. Giving each engine its
+		own lobby port fixes that; LANAPI answers every peer on the port it was
+		heard from, so a host and a joiner on different ports still find each
+		other. See LANAPI::m_lobbyPort.
+
+		Range-checked because a port is 16 bits and 0 already means "unset": a
+		silently truncated 70000 would bind 4464, and the failure would look
+		like the peer simply never answering.
+	*/
+	if (getInt(prefs, "lanPort", &i))
+	{
+		if ((i < 1) || (i > 65535))
+		{
+			fprintf(stderr, "BotConfig: lanPort must be 1..65535, not %d\n", i);
+			fflush(stderr);
+			return FALSE;
+		}
+		gd->m_netLobbyPort = i;
+	}
+
 	if (getString(prefs, "lobbyScript", &s))
 		gd->m_lobbyScript = s;
 

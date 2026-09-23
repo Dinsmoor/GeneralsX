@@ -41,7 +41,15 @@
 
 #include "GameNetwork/LANInterfaceDevice.h"
 
-static const UnsignedShort lobbyPort = 8086; ///< This is the UDP port used by all LANAPI communication
+/*	TheSuperHackers @feature the lobby port used to be this file-static:
+
+		static const UnsignedShort lobbyPort = 8086;
+
+	It is now LANAPI::m_lobbyPort for our own bind, and peerPort(ip) for where
+	we send -- see the comment on those members in LANAPI.h for why. The static
+	is deleted rather than kept as a fallback so that the compiler, not a test
+	run, finds any site that still wants a constant.
+*/
 
 
 AsciiString GetMessageTypeString(UnsignedInt type);
@@ -92,6 +100,82 @@ LANAPI::LANAPI() : m_transport(nullptr)
 	m_lastUpdate = 0;
 	m_transport = new Transport;
 	m_isActive = TRUE;
+
+	/*	Which port WE listen on. Read here rather than at the bind sites
+		because init() and SetLocalIP() both bind, and they must agree.
+
+		TheGlobalData exists by now: the value arrives from the startup
+		command-line parse (-lanport, or lanPort in a -botconfig INI), which
+		runs long before any lobby. 0 means "not asked for" and keeps retail
+		behaviour exactly.
+	*/
+	m_lobbyPort = LAN_LOBBY_PORT_DEFAULT;
+	if ((TheGlobalData != nullptr) && (TheGlobalData->m_netLobbyPort != 0))
+		m_lobbyPort = (UnsignedShort)TheGlobalData->m_netLobbyPort;
+
+	for (Int p = 0; p < MAX_PEER_PORTS; ++p)
+	{
+		m_peerPorts[p].ip = 0;
+		m_peerPorts[p].port = 0;
+	}
+}
+
+/*	Remember where a peer talks from, so that LATER sends reach it too.
+
+	Replying only to the immediate source would be enough for a request/response
+	pair, but most LANAPI traffic is not a reply: a host announces slot lists and
+	relays chat on its own schedule, to peers it enumerated earlier. Those sends
+	need the port as much as a reply does, so it is learned once and kept.
+
+	The table is tiny and keyed by IP. Two engines on one host share an IP only
+	if someone points them at the same address, which cannot work anyway (they
+	would collide on the game port 8088 as well), so IP is a sufficient key.
+	A peer that moves port -- a restarted engine on the same loopback address --
+	overwrites its own entry, which is what we want. When the table is full the
+	oldest-looking slot loses; it holds twice MAX_SLOTS, so a full lobby plus the
+	games it is browsing fits without eviction.
+*/
+void LANAPI::notePeerPort(UnsignedInt ip, UnsignedShort port)
+{
+	if ((ip == 0) || (port == 0) || (ip == m_localIP))
+		return;
+
+	Int firstFree = -1;
+	for (Int p = 0; p < MAX_PEER_PORTS; ++p)
+	{
+		if (m_peerPorts[p].ip == ip)
+		{
+			m_peerPorts[p].port = port;
+			return;
+		}
+		if ((firstFree < 0) && (m_peerPorts[p].ip == 0))
+			firstFree = p;
+	}
+
+	if (firstFree < 0)
+		firstFree = 0;	// full: evict slot 0 rather than lose the newest peer
+	m_peerPorts[firstFree].ip = ip;
+	m_peerPorts[firstFree].port = port;
+}
+
+/*	Where to send to reach this peer.
+
+	A peer we have never heard from is assumed to be on the default port. That
+	assumption is what keeps a non-default -lanport wire-compatible with a stock
+	client: the stock client listens on 8086 and we have no way to learn
+	otherwise until it answers, and it learns OUR port from the packets we send.
+*/
+UnsignedShort LANAPI::peerPort(UnsignedInt ip) const
+{
+	if (ip != 0)
+	{
+		for (Int p = 0; p < MAX_PEER_PORTS; ++p)
+		{
+			if (m_peerPorts[p].ip == ip)
+				return m_peerPorts[p].port;
+		}
+	}
+	return LAN_LOBBY_PORT_DEFAULT;
 }
 
 LANAPI::~LANAPI()
@@ -106,10 +190,10 @@ void LANAPI::init()
 	m_gameStartSeconds = 0;
 	m_transport->reset();
 #ifdef _WIN32
-	m_transport->init(m_localIP, lobbyPort);
+	m_transport->init(m_localIP, m_lobbyPort);
 #else
 	// GeneralsX @feature Mr. Meesseeks 11/07/2026 Bind to INADDR_ANY on POSIX to reliably receive broadcasts across interfaces.
-	m_transport->init(INADDR_ANY, lobbyPort);
+	m_transport->init(INADDR_ANY, m_lobbyPort);
 #endif
 	m_transport->allowBroadcasts(true);
 
@@ -187,6 +271,39 @@ void LANAPI::reset()
 	m_isInLANMenu = TRUE;
 	m_currentGame = nullptr;
 
+	/*	Forget learned ports along with the players and games they belonged to.
+		Keeping them would send the next lobby's traffic to where the last
+		lobby's peers used to be -- stale by exactly the amount that matters,
+		since a restarted peer is the case most likely to have moved port.
+		m_lobbyPort is OURS and deliberately survives: it came from the command
+		line, and reset() must not silently move the socket we are bound to.
+	*/
+	for (Int p = 0; p < MAX_PEER_PORTS; ++p)
+	{
+		m_peerPorts[p].ip = 0;
+		m_peerPorts[p].port = 0;
+	}
+}
+
+/*	TheSuperHackers @feature Broadcast to every port a peer might be listening on.
+
+	A unicast can be aimed at a learned port, but a broadcast is by definition
+	for peers we have not heard from, so there is nothing to learn from yet.
+	Anyone running retail settings is on LAN_LOBBY_PORT_DEFAULT, so that one is
+	mandatory. But if WE moved off the default, a broadcast to the default alone
+	would never reach a second engine that also moved -- our own port has to be
+	covered too, and that is exactly the two-engines-on-one-host case this whole
+	change exists for.
+
+	Two sends, not one, because a UDP datagram has a single destination port.
+	They collapse to one send in the overwhelmingly common case where the port is
+	the default, so retail traffic volume is unchanged.
+*/
+void LANAPI::broadcastMessage(UnsignedInt dst, LANMessage *msg)
+{
+	m_transport->queueSend(dst, LAN_LOBBY_PORT_DEFAULT, (unsigned char *)msg, sizeof(LANMessage));
+	if (m_lobbyPort != LAN_LOBBY_PORT_DEFAULT)
+		m_transport->queueSend(dst, m_lobbyPort, (unsigned char *)msg, sizeof(LANMessage));
 }
 
 void LANAPI::sendMessage(LANMessage *msg, UnsignedInt ip /* = 0 */)
@@ -194,12 +311,13 @@ void LANAPI::sendMessage(LANMessage *msg, UnsignedInt ip /* = 0 */)
 	if (ip != 0)
 	{
 		// GeneralsX @build GitHubCopilot 11/04/2026 Instrument direct LAN sends for cross-platform diagnostics.
-		Bool queued = m_transport->queueSend(ip, lobbyPort, (unsigned char *)msg, sizeof(LANMessage) /*, 0, 0 */);
+		const UnsignedShort dstPort = peerPort(ip);
+		Bool queued = m_transport->queueSend(ip, dstPort, (unsigned char *)msg, sizeof(LANMessage) /*, 0, 0 */);
 		DEBUG_LOG(("LANAPI::sendMessage - direct type=%s dst=%d.%d.%d.%d:%d queued=%d",
-			GetMessageTypeString(msg->messageType).str(), PRINTF_IP_AS_4_INTS(ip), lobbyPort, queued));
+			GetMessageTypeString(msg->messageType).str(), PRINTF_IP_AS_4_INTS(ip), dstPort, queued));
 		(void)queued;
 		/* 		fprintf(stderr, "[LAN86] send direct type=%u dst=%d.%d.%d.%d:%d queued=%d\n",
-			msg->messageType, PRINTF_IP_AS_4_INTS(ip), lobbyPort, queued); */
+			msg->messageType, PRINTF_IP_AS_4_INTS(ip), dstPort, queued); */
 	}
 	// GeneralsX @bugfix GitHubCopilot 12/04/2026 Prefer directed fan-out for in-game state/control packets to avoid cross-platform broadcast loss.
 	const Bool shouldUseDirectedFanout = (m_currentGame != nullptr)
@@ -224,11 +342,11 @@ void LANAPI::sendMessage(LANMessage *msg, UnsignedInt ip /* = 0 */)
 				GameSlot *slot = m_currentGame->getSlot(i);
 				if ((slot != nullptr) && (slot->isHuman())) {
 					// GeneralsX @build GitHubCopilot 11/04/2026 Instrument direct-connect fan-out sends.
-					Bool queued = m_transport->queueSend(slot->getIP(), lobbyPort, (unsigned char *)msg, sizeof(LANMessage) /*, 0, 0 */);
+					Bool queued = m_transport->queueSend(slot->getIP(), peerPort(slot->getIP()), (unsigned char *)msg, sizeof(LANMessage) /*, 0, 0 */);
 					sentAny = TRUE;
 					(void)queued;
 					/* 					fprintf(stderr, "[LAN86] send directed-fanout type=%s dst=%d.%d.%d.%d:%d queued=%d\n",
-						GetMessageTypeString(msg->messageType).str(), PRINTF_IP_AS_4_INTS(slot->getIP()), lobbyPort, queued);
+						GetMessageTypeString(msg->messageType).str(), PRINTF_IP_AS_4_INTS(slot->getIP()), peerPort(slot->getIP()), queued);
 					fflush(stderr); */
 				}
 			}
@@ -236,10 +354,9 @@ void LANAPI::sendMessage(LANMessage *msg, UnsignedInt ip /* = 0 */)
 
 		if (!sentAny)
 		{
-			Bool queued = m_transport->queueSend(m_broadcastAddr, lobbyPort, (unsigned char *)msg, sizeof(LANMessage) /*, 0, 0 */);
-			(void)queued;
-			/* 			fprintf(stderr, "[LAN86] send directed-fanout-fallback-broadcast type=%s dst=%d.%d.%d.%d:%d local=%d.%d.%d.%d queued=%d\n",
-				GetMessageTypeString(msg->messageType).str(), PRINTF_IP_AS_4_INTS(m_broadcastAddr), lobbyPort, PRINTF_IP_AS_4_INTS(m_localIP), queued);
+			broadcastMessage(m_broadcastAddr, msg);
+			/* 			fprintf(stderr, "[LAN86] send directed-fanout-fallback-broadcast type=%s dst=%d.%d.%d.%d local=%d.%d.%d.%d\n",
+				GetMessageTypeString(msg->messageType).str(), PRINTF_IP_AS_4_INTS(m_broadcastAddr), PRINTF_IP_AS_4_INTS(m_localIP));
 			fflush(stderr); */
 		}
 	}
@@ -252,19 +369,17 @@ void LANAPI::sendMessage(LANMessage *msg, UnsignedInt ip /* = 0 */)
 		for (Int i = 0; i < subnetCount; ++i)
 		{
 			UnsignedInt dst = subnetBroadcasts[i];
-			Bool queued = m_transport->queueSend(dst, lobbyPort, (unsigned char *)msg, sizeof(LANMessage) /*, 0, 0 */);
+			broadcastMessage(dst, msg);
 			sentAny = TRUE;
-			(void)queued;
-			/* 			fprintf(stderr, "[LAN86] send subnet-broadcast type=%s dst=%d.%d.%d.%d:%d local=%d.%d.%d.%d queued=%d\n",
-				GetMessageTypeString(msg->messageType).str(), PRINTF_IP_AS_4_INTS(dst), lobbyPort, PRINTF_IP_AS_4_INTS(m_localIP), queued);
+			/* 			fprintf(stderr, "[LAN86] send subnet-broadcast type=%s dst=%d.%d.%d.%d local=%d.%d.%d.%d\n",
+				GetMessageTypeString(msg->messageType).str(), PRINTF_IP_AS_4_INTS(dst), PRINTF_IP_AS_4_INTS(m_localIP));
 			fflush(stderr); */
 		}
 		if (!sentAny)
 		{
-			Bool queued = m_transport->queueSend(m_broadcastAddr, lobbyPort, (unsigned char *)msg, sizeof(LANMessage) /*, 0, 0 */);
-			(void)queued;
-			/* 			fprintf(stderr, "[LAN86] send broadcast type=%s dst=%d.%d.%d.%d:%d local=%d.%d.%d.%d queued=%d\n",
-				GetMessageTypeString(msg->messageType).str(), PRINTF_IP_AS_4_INTS(m_broadcastAddr), lobbyPort, PRINTF_IP_AS_4_INTS(m_localIP), queued);
+			broadcastMessage(m_broadcastAddr, msg);
+			/* 			fprintf(stderr, "[LAN86] send broadcast type=%s dst=%d.%d.%d.%d local=%d.%d.%d.%d\n",
+				GetMessageTypeString(msg->messageType).str(), PRINTF_IP_AS_4_INTS(m_broadcastAddr), PRINTF_IP_AS_4_INTS(m_localIP));
 			fflush(stderr); */
 		}
 
@@ -297,7 +412,7 @@ void LANAPI::sendMessage(LANMessage *msg, UnsignedInt ip /* = 0 */)
 					continue;
 				const UnsignedInt ipTo = m_currentGame->getIP(i);
 				if (ipTo != 0 && ipTo != m_localIP)
-					m_transport->queueSend(ipTo, lobbyPort, (unsigned char *)msg, sizeof(LANMessage) /*, 0, 0 */);
+					m_transport->queueSend(ipTo, peerPort(ipTo), (unsigned char *)msg, sizeof(LANMessage) /*, 0, 0 */);
 			}
 		}
 	}
@@ -468,6 +583,17 @@ void LANAPI::update()
 				m_transport->m_inBuffer[i].length = 0;
 				continue;
 			}
+
+			/*	TheSuperHackers @feature Learn where this peer talks from.
+
+				Transport.cpp already records the source port of every inbound
+				packet; LANAPI simply threw it away, because the port was a
+				constant and there was nothing to learn. Recording it here --
+				the single place every lobby packet passes through -- is what
+				lets sendMessage() answer a peer on a non-default port, and
+				keep answering it for the rest of the lobby's life.
+			*/
+			notePeerPort(senderIP, m_transport->m_inBuffer[i].port);
 
 			LANMessage *msg = (LANMessage *)(m_transport->m_inBuffer[i].data);
 			/* 			fprintf(stderr, "[LAN86] recv type=%s (%u) len=%d from %d.%d.%d.%d local=%d.%d.%d.%d\n",
@@ -774,7 +900,7 @@ void LANAPI::RequestLocations()
 	fillInLANMessage( &msg );
 	// GeneralsX @build GitHubCopilot 11/04/2026 Trace LAN discovery probes emitted by this client.
 	/* 	fprintf(stderr, "[LAN86] RequestLocations local=%d.%d.%d.%d broadcast=%d.%d.%d.%d port=%d\n",
-		PRINTF_IP_AS_4_INTS(m_localIP), PRINTF_IP_AS_4_INTS(m_broadcastAddr), lobbyPort);
+		PRINTF_IP_AS_4_INTS(m_localIP), PRINTF_IP_AS_4_INTS(m_broadcastAddr), m_lobbyPort);
 	fflush(stderr); */
 	sendMessage(&msg);
 }
@@ -1460,19 +1586,19 @@ Bool LANAPI::SetLocalIP( UnsignedInt localIP )
 	m_localIP = localIP;
 	// GeneralsX @build GitHubCopilot 11/04/2026 Trace LAN socket rebind lifecycle for issue #86 diagnostics.
 	/* 	fprintf(stderr, "[LAN86] SetLocalIP rebind from %d.%d.%d.%d to %d.%d.%d.%d:%d\n",
-		PRINTF_IP_AS_4_INTS(oldIP), PRINTF_IP_AS_4_INTS(m_localIP), lobbyPort);
+		PRINTF_IP_AS_4_INTS(oldIP), PRINTF_IP_AS_4_INTS(m_localIP), m_lobbyPort);
 	fflush(stderr); */
 
 	m_transport->reset();
 #ifdef _WIN32
-	retval = m_transport->init(m_localIP, lobbyPort);
+	retval = m_transport->init(m_localIP, m_lobbyPort);
 #else
 	// GeneralsX @feature Mr. Meesseeks 11/07/2026 Bind to INADDR_ANY on POSIX to reliably receive broadcasts across interfaces.
-	retval = m_transport->init(INADDR_ANY, lobbyPort);
+	retval = m_transport->init(INADDR_ANY, m_lobbyPort);
 #endif
 	m_transport->allowBroadcasts(true);
 	/* 	fprintf(stderr, "[LAN86] SetLocalIP result init=%d allowBroadcasts=%d local=%d.%d.%d.%d:%d\n",
-		retval, broadcastsEnabled, PRINTF_IP_AS_4_INTS(m_localIP), lobbyPort);
+		retval, broadcastsEnabled, PRINTF_IP_AS_4_INTS(m_localIP), m_lobbyPort);
 	fflush(stderr); */
 
 	return retval;

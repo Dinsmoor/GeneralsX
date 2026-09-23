@@ -583,6 +583,53 @@ static Bool parseIPv4(const char *text, UnsignedInt *out)
 }
 
 /**
+	Parse "10.0.0.5" or "10.0.0.5:8087" -- an address with an OPTIONAL port.
+
+	The port is needed only for direct connect, and only when the host moved
+	off the default lobby port. Discovery does not need it: a host's announce
+	packet teaches us its port before we ever answer, so the peer port table
+	is already right by the time we send anything. Direct connect has no such
+	packet -- we unicast the first datagram to an address that was typed in --
+	so without the ":port" there is nothing to tell us where to aim, and the
+	join request lands on a port nobody is listening to.
+
+	*port is left ALONE when no suffix is given, so the caller's default
+	survives. It is not defaulted here because "no port was specified" and
+	"port 0 was specified" have to stay distinguishable.
+*/
+static Bool parseIPv4WithPort(const char *text, UnsignedInt *out, UnsignedShort *port)
+{
+	if (text == nullptr)
+		return FALSE;
+
+	const char *colon = strchr(text, ':');
+	if (colon == nullptr)
+		return parseIPv4(text, out);
+
+	// Split at the colon so parseIPv4 still sees a bare quad and keeps its
+	// own strictness about trailing junk.
+	char addr[64];
+	const size_t addrLen = (size_t)(colon - text);
+	if (addrLen == 0 || addrLen >= sizeof(addr))
+		return FALSE;
+	memcpy(addr, text, addrLen);
+	addr[addrLen] = 0;
+
+	if (!parseIPv4(addr, out))
+		return FALSE;
+
+	Int p = -1;
+	char tail = 0;
+	if (sscanf(colon + 1, "%d%c", &p, &tail) != 1)
+		return FALSE;
+	if (p < 1 || p > 65535)
+		return FALSE;
+
+	*port = (UnsignedShort)p;
+	return TRUE;
+}
+
+/**
 	LEAVE THE LOBBY WHEN WE ARE KILLED.
 
 	Ctrl-C, a `kill`, or the launcher script taking the engine down at the
@@ -1537,6 +1584,7 @@ Int BotLanJoin::runLanJoin()
 
 	AsciiString host = TheGlobalData->m_botJoinHost;
 	UnsignedInt hostIP = 0;
+	UnsignedShort hostPort = 0;		///< 0 = not told; use the default lobby port
 
 	/*	"any": find a lobby instead of being told where one is.
 
@@ -1615,7 +1663,10 @@ Int BotLanJoin::runLanJoin()
 		// JoinDirectConnectGame(): octets shifted into host byte order, which
 		// is what LANAPI works in throughout. inet_addr would give network
 		// order and silently reach the wrong machine.
-		if (!parseIPv4(host.str(), &hostIP) || hostIP == 0)
+		//
+		// "host = 10.0.0.5:8087" names the host's lobby port as well, for a
+		// host that moved off the default. 0 means "not given"; see below.
+		if (!parseIPv4WithPort(host.str(), &hostIP, &hostPort) || hostIP == 0)
 		{
 			printf("BotJoin: '%s' is not an address I can parse\n", host.str());
 			return 1;
@@ -1625,24 +1676,50 @@ Int BotLanJoin::runLanJoin()
 			return 1;					// startLan already said why
 	}
 
-	/*	Refuse to share an address with the host.
+	/*	Refuse to share BOTH an address and a port with the host.
 
-		LANAPI assumes ONE engine per machine -- "everyone has a unique
-		IP, so it's ok to use the same port". Two engines on the same
-		address fight over the lobby port and the transport bind, and the
-		host is the one that dies. Hosting from this same box is a normal
-		thing to want for testing, so say exactly how to do it rather
-		than letting the collision take the game down.
+		LANAPI was written assuming one engine per machine -- "everyone has a
+		unique IP, so it's ok to use the same port" -- so originally sharing an
+		address at all was fatal: two engines fought over the lobby port and
+		the transport bind, and the host was the one that died.
+
+		Now that the lobby port is configurable, the real requirement is
+		narrower: the pair (address, port) has to be unique, not the address.
+		Distinct loopback addresses still work and remain the simplest answer,
+		but a distinct lanPort is now equally valid -- which matters on a host
+		with no spare addresses to hand out.
+
+		The game transport is the reason an address clash is still checked at
+		all: ConnectionManager binds NETWORK_BASE_PORT_NUMBER on the local
+		address, and that port is NOT configurable, so two engines on one
+		address would still collide once the match itself started -- just later
+		and far more confusingly than a refused bind.
 	*/
 	if (TheLAN->GetLocalIP() == hostIP)
 	{
 		printf("BotNet: I bound to %d.%d.%d.%d, which is the host's own address.\n",
 			PRINTF_IP_AS_4_INTS(hostIP));
-		printf("BotNet: two engines cannot share one address -- LANAPI expects\n");
-		printf("BotNet: one per machine. If the host is on THIS machine, join it\n");
-		printf("BotNet: over loopback instead:\n");
-		printf("BotNet:     -botjoinmp 127.0.0.1 -netlocalip 127.0.0.2\n");
+		printf("BotNet: two engines cannot share one address: the in-game transport\n");
+		printf("BotNet: binds port %d on it and that port is not configurable.\n",
+			NETWORK_BASE_PORT_NUMBER);
+		printf("BotNet: If the host is on THIS machine, give us a different one --\n");
+		printf("BotNet: the whole 127/8 range is routable and needs no setup:\n");
+		printf("BotNet:     host = 127.0.0.1   localIP = 127.0.0.2\n");
 		return 1;
+	}
+
+	/*	Aim the first datagram at the host's real port.
+
+		Everything after this learns ports from inbound packets, but the join
+		request IS the first packet, so there is nothing to have learned yet
+		and peerPort() would fall back to the default. Only the explicit
+		host=ip:port path can know better; discovery does not need to, because
+		the announce that revealed the host also taught us its port.
+	*/
+	if (hostPort != 0)
+	{
+		printf("BotJoin: host lobby port is %d\n", hostPort);
+		TheLAN->SetPeerPort(hostIP, hostPort);
 	}
 
 	printf("BotJoin: joining %s as '%s'\n", host.str(), TheGlobalData->m_botJoinName.str());

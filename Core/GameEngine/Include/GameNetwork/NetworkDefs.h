@@ -226,6 +226,14 @@ static const UnsignedShort GENERALS_MAGIC_NUMBER = 0xF00D;
 // value to get their actual port number.
 static const Int NETWORK_BASE_PORT_NUMBER = 8088;
 
+// TheSuperHackers @feature The default UDP port for LANAPI lobby traffic --
+// discovery, game setup and chat, everything before the game starts. It used to
+// be a file-static constant in LANAPI.cpp; it lives here now because it is the
+// port a stock client listens on, so it is what we must assume for any peer we
+// have not yet heard from. LANAPI::m_lobbyPort may differ from it (see the
+// comment on that member), which is what lets two engines share one host.
+static const UnsignedShort LAN_LOBBY_PORT_DEFAULT = 8086;
+
 // the singleton
 class NetworkInterface;
 extern NetworkInterface *TheNetwork;

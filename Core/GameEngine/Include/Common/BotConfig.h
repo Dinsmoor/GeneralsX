@@ -26,6 +26,9 @@
 **	    lanLobby = no            ; host a broadcast LAN game, not direct connect
 **	    name     = Claude        ; lobby name, and the word we answer to
 **	    localIP  = 127.0.0.2     ; bind LAN networking to this address
+**	    lanPort  = 8087          ; UDP port for the LAN lobby, default 8086;
+**	                             ;   two engines on one POSIX host need distinct
+**	                             ;   ports, not just distinct addresses
 **	    faction  = China         ; china | america | gla | a general's name
 **
 **	    ; the agent driving us

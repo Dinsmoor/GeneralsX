@@ -142,11 +142,19 @@ public:
 	AsciiString m_lobbyScript;		///< file of chat lines a bot host sends, for testing		///< map to host, as the skirmish launcher names them
 	Int m_botHostPlayers;			///< start once this many players are in the lobby (default 2)
 	AsciiString m_netLocalIP;		///< bind LAN networking to this address instead of the default one.
-	AsciiString m_botFaction;		///< faction the bot asks for, as a word ("China"); resolved once the template store exists
 									///< LANAPI assumes one instance per machine ("everyone has a unique
 									///< IP, so it's ok to use the same port"), so two engines on one box
 									///< need distinct addresses -- 127.0.0.1 and 127.0.0.2 both work,
 									///< the whole 127/8 range is routable. Empty for normal play.
+	Int m_netLobbyPort;				///< UDP port for the LAN lobby; 0 means LAN_LOBBY_PORT_DEFAULT (8086).
+									///< A distinct local address is enough on Windows, where the lobby
+									///< socket binds that specific address. It is NOT enough on POSIX,
+									///< where we must bind INADDR_ANY to receive broadcasts at all, so
+									///< the PORT is what collides and the second engine fails to bind.
+									///< Setting this gives each engine its own lobby port; LANAPI then
+									///< answers each peer on the port it was heard from, so the two
+									///< still find each other. See LANAPI::m_lobbyPort.
+	AsciiString m_botFaction;		///< faction the bot asks for, as a word ("China"); resolved once the template store exists
 
 	// GeneralsX @feature BenderAI 21/04/2026 Allow user to opt out of the in-game update checker
 	Bool m_checkForUpdates;
