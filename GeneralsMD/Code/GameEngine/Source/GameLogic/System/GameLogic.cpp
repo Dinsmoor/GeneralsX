@@ -52,6 +52,7 @@
 #include <windows.h>
 #else
 #include <sys/utsname.h>
+#include <unistd.h>			// getpid(), to keep co-located dumps apart
 #include <SDL3/SDL.h>
 #endif
 #endif
@@ -5812,11 +5813,46 @@ void GameLogic::writeCRCBuffersToDisk(UnsignedInt frame) const
 	}
 #endif
 
-	// Format filename as deep_crc_YYYY-MM-DD-HH-MM-SS_f<frame>.bin inside user data Debug dir
+	// Format filename as deep_crc_YYYY-MM-DD-HH-MM-SS_p<port>_f<frame>.bin
+	// inside the user data Debug dir.
 	time_t t = time(nullptr);
 	struct tm *tm_info = localtime(&t);
 	char timebuf[32];
 	strftime(timebuf, 32, "%Y-%m-%d-%H-%M-%S", tm_info);
+
+	/*	The timestamp alone is NOT a unique name.
+
+		It has one-second resolution, and every peer in a lockstep game detects
+		the same mismatch on the same logic frame -- so co-located instances
+		reliably collide. Measured 2026-09-23: six headless clients on one
+		machine desynced together at frame 5300 and FIVE of them wrote
+		"deep_crc_2026-09-23-13-15-18_f5300.bin" into the same user-data
+		directory, each truncating the last. Two files survived for six
+		clients, and neither could be attributed to a particular client, which
+		is exactly the information a multi-client capture exists to provide.
+
+		The lobby port is the discriminator, because it is what makes several
+		clients on one machine possible in the first place -- the lobby socket
+		binds INADDR_ANY, so the address cannot separate two instances and the
+		port is guaranteed distinct (see LANAPI::m_lobbyPort). It is also the
+		name our tooling already knows each instance by.
+
+		The pid is appended only when there is no LAN game to ask -- a
+		skirmish, a replay or an online match -- where the port is meaningless
+		but two engines can still share a user-data dir. Both are omitted from
+		nothing: a single retail client keeps a fully descriptive name, it just
+		gains "_p8086".
+	*/
+	char idbuf[32];
+	const UnsignedShort lobbyPort = (TheLAN != nullptr) ? TheLAN->GetLobbyPort() : 0;
+	if (lobbyPort != 0)
+		snprintf(idbuf, sizeof(idbuf), "p%u", (unsigned)lobbyPort);
+	else
+#ifdef _WIN32
+		snprintf(idbuf, sizeof(idbuf), "pid%lu", (unsigned long)GetCurrentProcessId());
+#else
+		snprintf(idbuf, sizeof(idbuf), "pid%ld", (long)getpid());
+#endif
 
 	// TheGlobalData->getPath_UserData() gives standard document path
 	// Let's create Debug dir if not exists (in cross-platform way, handled by file system)
@@ -5825,9 +5861,9 @@ void GameLogic::writeCRCBuffersToDisk(UnsignedInt frame) const
 	TheFileSystem->createDirectory(logDir);
 
 #ifdef _WIN32
-	str.format("%s\\deep_crc_%s_f%u.bin", logDir.str(), timebuf, frame);
+	str.format("%s\\deep_crc_%s_%s_f%u.bin", logDir.str(), timebuf, idbuf, frame);
 #else
-	str.format("%s/deep_crc_%s_f%u.bin", logDir.str(), timebuf, frame);
+	str.format("%s/deep_crc_%s_%s_f%u.bin", logDir.str(), timebuf, idbuf, frame);
 #endif
 
 	FILE* fp = fopen(str.str(), "wb");
