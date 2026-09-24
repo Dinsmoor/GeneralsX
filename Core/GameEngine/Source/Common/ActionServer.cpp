@@ -1839,7 +1839,14 @@ void ActionServer::executeLine( const char *line )
 				body.append(",\"upgrade\":\"");
 				appendEscaped(body, up->getUpgradeName().str());
 				body.append("\",\"owned\":");
-				body.append(player->hasUpgradeComplete(up) ? "true" : "false");
+				// An OBJECT upgrade (an Overlord's add-on, a vehicle's drone)
+				// belongs to this one object; the player never "has" it, so
+				// asking the player reported every one as unowned for ever.
+				const Bool perObject = (up->getUpgradeType() == UPGRADE_TYPE_OBJECT);
+				body.append((perObject ? builder->hasUpgrade(up)
+				                       : player->hasUpgradeComplete(up)) ? "true" : "false");
+				if (perObject)
+					body.append(",\"per_object\":true");
 				body.append(",\"cost\":");
 				appendInt(body, (Int)up->calcCostToBuild(player));
 			}

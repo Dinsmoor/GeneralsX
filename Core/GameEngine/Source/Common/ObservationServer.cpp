@@ -1930,6 +1930,55 @@ void ObservationServer::buildObservation( std::string &out )
 			}
 		}
 
+		// Our own units' state that their own buttons show: which per-object
+		// upgrades they carry, and when each of their abilities recharges.
+		//
+		// "ups": OBJECT-type upgrades complete on THIS object -- an Overlord's
+		// Gattling Cannon, a Humvee's drone. The player-level upgrade list
+		// cannot say which of our twelve Overlords already has its add-on.
+		//
+		// "sp": this object's own special powers and the frame each is ready.
+		// The player "powers" list reports one source per power TYPE, so ten
+		// Tank Hunters' TNT or a Black Lotus's hacks were one shared clock.
+		//
+		// Both are const reads (hasUpgrade tests a bitmask; getReadyFrame
+		// returns a stored frame) -- nothing here may touch
+		// GameLogicRandomValue. Both only change when the state does, so they
+		// cost nothing in a delta frame.
+		if (isOwn)
+		{
+			Bool firstUp = TRUE;
+			for (const UpgradeTemplate *ut = TheUpgradeCenter ? TheUpgradeCenter->firstUpgradeTemplate() : nullptr;
+					 ut != nullptr; ut = ut->friend_getNext())
+			{
+				if (ut->getUpgradeType() != UPGRADE_TYPE_OBJECT || !obj->hasUpgrade(ut))
+					continue;
+				out += firstUp ? ",\"ups\":[\"" : ",\"";
+				firstUp = FALSE;
+				out += ut->getUpgradeName().str();
+				out += '"';
+			}
+			if (!firstUp)
+				out += ']';
+
+			Bool firstSp = TRUE;
+			for (BehaviorModule **m = obj->getBehaviorModules(); m != nullptr && *m != nullptr; ++m)
+			{
+				SpecialPowerModuleInterface *sp = (*m)->getSpecialPower();
+				if (sp == nullptr)
+					continue;
+				const SpecialPowerTemplate *spt = sp->getSpecialPowerTemplate();
+				if (spt == nullptr)
+					continue;
+				scratch.format("%s{\"n\":\"%s\",\"r\":%u}", firstSp ? ",\"sp\":[" : ",",
+					spt->getName().str(), (unsigned)sp->getReadyFrame());
+				firstSp = FALSE;
+				out += scratch.str();
+			}
+			if (!firstSp)
+				out += ']';
+		}
+
 		out += '}';
 
 		// Emit the object: whole on a keyframe or when new, otherwise only
