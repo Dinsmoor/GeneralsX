@@ -431,6 +431,7 @@ void SDL3Mouse::update(void)
  */
 void SDL3Mouse::initCursorResources(void)
 {
+	Int missing = 0;
 	for (Int cursor=FIRST_CURSOR; cursor<NUM_MOUSE_CURSORS; cursor++)
 	{
 		for (Int direction=0; direction<m_cursorInfo[cursor].numDirections; direction++)
@@ -445,9 +446,17 @@ void SDL3Mouse::initCursorResources(void)
 
 				cursorResources[cursor][direction]=loadCursorFromFile(resourcePath);
 				DEBUG_ASSERTCRASH(cursorResources[cursor][direction], ("MissingCursor %s\n",resourcePath));
+				if (!cursorResources[cursor][direction])
+					++missing;
 			}
 		}
 	}
+
+	// GeneralsX @bugfix tyler 24/09/2026 The cursors are loose files in the game's Data folder,
+	// not in any archive. Without that folder every cursor falls back to the system arrow.
+	if (missing > 0)
+		fprintf(stderr, "[CURSOR] WARNING: %d cursor files not found under Data/Cursors; "
+			"the game's Data folder is missing from the install.\n", missing);
 }
 
 /**
@@ -511,6 +520,13 @@ void SDL3Mouse::setCursor(MouseCursor cursor)
 void SDL3Mouse::draw(void)
 {
 	setCursor(m_currentCursor);
+
+	// GeneralsX @bugfix tyler 24/09/2026 Draw the cursor text and tooltip, as W3DMouse::draw does.
+	// Linux creates SDL3Mouse instead of W3DMouse, and W3DMouse::draw was the only caller of
+	// these, so no tooltip ever appeared.
+	drawCursorText();
+	if (m_IsVisible)
+		drawTooltip();
 }
 
 #ifndef M_PI
