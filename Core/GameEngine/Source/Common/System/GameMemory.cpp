@@ -3448,14 +3448,27 @@ void operator delete[](void * p, const char *, int)
 // movaps instructions in library constructors crash on pool-allocated memory.
 // These overloads bypass the pool and use posix_memalign for such allocations.
 // GeneralsX @bugfix 09/03/2026
+//
+// posix_memalign rejects an alignment smaller than sizeof(void*) with EINVAL,
+// but aligned operator new must accept ANY power of two. LLVM's allocate_buffer
+// calls it with alignments as small as 1, so any in-process LLVM user (Mesa's
+// lavapipe, for one) died with "LLVM ERROR: out of memory / Buffer allocation
+// failed" on a machine with 47 GB free. Round the alignment up; a larger
+// alignment is always a valid answer to a smaller request.
 #ifndef _WIN32
 #include <new>
 #include <cstdlib>
 
+static size_t posixAlignment(std::align_val_t alignment)
+{
+	const size_t a = static_cast<size_t>(alignment);
+	return (a < sizeof(void *)) ? sizeof(void *) : a;
+}
+
 void *operator new(size_t size, std::align_val_t alignment)
 {
 	void *p = nullptr;
-	if (::posix_memalign(&p, static_cast<size_t>(alignment), size) != 0)
+	if (::posix_memalign(&p, posixAlignment(alignment), size) != 0)
 		throw std::bad_alloc();
 	return p;
 }
@@ -3463,7 +3476,7 @@ void *operator new(size_t size, std::align_val_t alignment)
 void *operator new[](size_t size, std::align_val_t alignment)
 {
 	void *p = nullptr;
-	if (::posix_memalign(&p, static_cast<size_t>(alignment), size) != 0)
+	if (::posix_memalign(&p, posixAlignment(alignment), size) != 0)
 		throw std::bad_alloc();
 	return p;
 }

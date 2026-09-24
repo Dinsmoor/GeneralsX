@@ -499,6 +499,14 @@ static void loadBaseGeneralsAssetsForZH(TBigFileSystem* fileSystem, const AsciiS
 			return;
 		}
 	}
+
+	// Zero Hour takes many unit models from the base game's W3D.big (the China Tank
+	// Hunter's is one). Without them the model load returns null, the unit has no weapon
+	// bones and its projectiles launch from its feet -- a logic difference, so this peer
+	// silently desyncs against any client that has the assets.
+	fprintf(stderr, "[ASSET_ROOT] WARNING: base Generals assets NOT found (set %s or [Paths]%s).\n"
+		"[ASSET_ROOT] Models from the base game will be missing and multiplayer WILL desync.\n",
+		kBaseGeneralsAssetEnv, kBaseGeneralsAssetIniKey);
 }
 #endif
 

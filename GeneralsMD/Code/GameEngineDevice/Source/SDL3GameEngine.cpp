@@ -551,40 +551,10 @@ Radar *SDL3GameEngine::createRadar(Bool dummy)
 // GeneralsX @bugfix Copilot 24/03/2026 Match upstream GameEngine pure-virtual signature after sync.
 ParticleSystemManager* SDL3GameEngine::createParticleSystemManager(Bool dummy)
 {
-	/*	Headless gets the REAL particle system manager, not a dummy.
-
-		A LOGIC random draw lives inside the particle branch of
-		TransitionDamageFX: the effect position for a `RandomBone:Yes` slot is
-		chosen with GameLogicRandomValue, and the whole block is gated on
-		`if (pSystemT)` -- the particle TEMPLATE being present. The dummy stubbed
-		init(), so no templates loaded, so a headless peer skipped the block and
-		with it the draw, while a rendering peer took it. One missing draw
-		misaligns the logic RNG for the rest of the match and the game desyncs on
-		first contact. Measured: a replay recorded WITH graphics fails the
-		engine's own determinism check when replayed headless (exit 1), and
-		passes when replayed with graphics.
-
-		Moving that draw to the client generator is NOT an option: a stock retail
-		client rolls the logic rng there, so any peer that does not diverges from
-		retail. The draw sequence is part of the network contract.
-
-		So headless must do the same simulation work a real client does and skip
-		only PRESENTATION. That is safe here because the split already exists:
-
-		  * ParticleSystemManager::update() is pure simulation -- it steps each
-		    system and reaps dead ones. Its one render-adjacent part, smudge, is
-		    already guarded inline on m_headless.
-		  * The GPU work is doParticles()/queueParticleRender(), which are driven
-		    from WW3D::Flush() in the render pipeline. Headless never flushes, so
-		    they are unreachable rather than merely unused.
-		  * W3DParticleSystemManager's constructor allocates only CPU-side
-		    buffers (PointGroupClass, ShareBufferClass); it touches no D3D device.
-
-		ParticleSystemManagerDummy is kept for callers that genuinely want no
-		particle simulation at all, but headless is not one of them. */
+	// GeneralsX @bugfix fbraz 04/05/2026 Respect headless mode and create dummy particle manager.
 	if (dummy) {
-		fprintf(stderr, "INFO: SDL3GameEngine::createParticleSystemManager() -> W3DParticleSystemManager (headless: simulated, not rendered)\n");
-		return NEW W3DParticleSystemManager;
+		fprintf(stderr, "INFO: SDL3GameEngine::createParticleSystemManager() -> ParticleSystemManagerDummy (headless)\n");
+		return NEW ParticleSystemManagerDummy;
 	}
 	fprintf(stderr, "INFO: SDL3GameEngine::createParticleSystemManager() -> W3DParticleSystemManager\n");
 	return NEW W3DParticleSystemManager;
