@@ -1675,7 +1675,10 @@ void SphereMeshClass::Generate(float radius, int slices, int stacks)
 	}
 
 	// Make Sure ptr is where I expect it to be
-	WWASSERT(((int)out) == ((int)(tri_poly + face_ct)));
+	// Compare the pointers directly. The original cast both to int, which is a
+	// 64-bit truncation that only compiles on 32-bit MSVC; this assert lives in
+	// a debug-only path, so nothing caught it until a 64-bit debug build.
+	WWASSERT(out == (tri_poly + face_ct));
 
 	//
 	//	Fill in the DCG array

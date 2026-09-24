@@ -306,7 +306,12 @@ inline VeterancyLevelFlags clearVeterancyLevelFlag(VeterancyLevelFlags flags, Ve
 }
 
 // ----------------------------------------------------------------------------------------------
-#define BOGUSPTR(p) ((((unsigned int)(p)) & 1) != 0)
+// Tests the low bit, which the DLINK debug checks use to mark a deliberately
+// bogus pointer. uintptr_t, not unsigned int: the original truncates a 64-bit
+// pointer, which is an error rather than a warning on GCC/Clang. It only bites
+// in a build with debug checks enabled, which is why a release build never
+// noticed.
+#define BOGUSPTR(p) ((((uintptr_t)(p)) & 1) != 0)
 
 // ----------------------------------------------------------------------------------------------
 #define MAKE_DLINK_HEAD(OBJCLASS, LISTNAME)																						\

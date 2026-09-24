@@ -303,6 +303,21 @@
                 "SAGE_USE_MINIAUDIO": "ON"
             },
             "description": "Experimental: Linux build with miniaudio audio backend instead of OpenAL+FFmpeg. Single-header library for audio playback/capture."
+        },
+        {
+            "name": "linux64-randomtrace",
+            "displayName": "Linux 64-bit Release + logic random draw tracing",
+            "inherits": "linux64-deploy",
+            "generator": "Ninja",
+            "hidden": false,
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "RTS_DEBUG_LOGGING": "ON",
+                "RTS_DEBUG_RANDOM_LOGIC": "ON",
+                "RTS_DEBUG_PROFILE": "OFF",
+                "RTS_DEBUG_STACKTRACE": "OFF"
+            },
+            "description": "Finds a lockstep desync caused by one peer taking a logic random draw the others did not. Every GameLogic draw logs its frame, value, range, FILE and LINE, so diffing two peers' logs names the offending call site. Build EVERY peer in the match with this, including headless bots, or the logs are not comparable. Uses its own binaryDir so the release build is untouched. Very chatty: combat is thousands of draws per second. RTS_DEBUG_PROFILE and RTS_DEBUG_STACKTRACE must be OFF, not DEFAULT: DEBUG_LOGGING sets ALLOW_DEBUG_UTILS, which auto-enables DEBUG_PROFILE (Debug.h:87), and that block is MSVC-only -- SimpleProfiler uses __int64 and fails to compile on GCC/Clang. Pre-existing rot, unrelated to the tracing."
         }
     ],
     "buildPresets": [
@@ -408,6 +423,12 @@
             "configurePreset": "linux64-deploy",
             "displayName": "Build Linux 64-bit DXVK/SDL3/OpenAL Release",
             "description": "Build Linux 64-bit with DXVK graphics, SDL3 windowing, and OpenAL audio"
+        },
+        {
+            "name": "linux64-randomtrace",
+            "configurePreset": "linux64-randomtrace",
+            "displayName": "Build Linux 64-bit Release + logic random draw tracing",
+            "description": "Build the desync-hunting engine: logs every GameLogic random draw with file and line"
         },
         {
             "name": "linux64-openal",

@@ -46,6 +46,10 @@
 //#include "win.h" can use this if allowed to see wwlib
 #include <stdlib.h>
 #include <stdarg.h>
+// strlen, used by the WWASSERT length checks below. Only reached in a build
+// with debug enabled, which is why this was missing: the MSVC headers pulled
+// it in transitively and no release build compiles those asserts.
+#include <string.h>
 #include <Utility/stdio_adapter.h>
 #include <assert.h>
 #include <signal.h>

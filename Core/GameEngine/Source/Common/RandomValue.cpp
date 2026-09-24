@@ -34,15 +34,136 @@
 #include "Common/Debug.h"
 #include "GameLogic/GameLogic.h"
 
-#undef DEBUG_RANDOM_AUDIO
-#undef DEBUG_RANDOM_CLIENT
-#undef DEBUG_RANDOM_LOGIC
-#undef DETERMINISTIC
+/*	These were hand-edited comment toggles, so turning one on meant modifying
+	tracked source on every machine in the match and remembering to revert it.
+	Worse, the unconditional #undef block DISCARDED anything the build defined,
+	so passing -DDEBUG_RANDOM_LOGIC looked like it worked and did nothing.
 
-//#define DEBUG_RANDOM_AUDIO
-//#define DEBUG_RANDOM_CLIENT
-//#define DEBUG_RANDOM_LOGIC
-//#define DETERMINISTIC       // to allow repetition for debugging
+	Each is now settable from the build (cmake/config-debug.cmake:
+	RTS_DEBUG_RANDOM_LOGIC and friends) and is only cleared when the build did
+	NOT ask for it, which keeps the default byte-identical to before.
+
+	DEBUG_RANDOM_LOGIC is the one a desync hunt wants: every logic draw logs
+	its frame, value, range, FILE and LINE, so diffing two peers' logs names
+	the exact call site that ran on one and not the other. It is extremely
+	chatty -- combat is thousands of draws a second -- so it is a deliberate
+	build, never a default. */
+#ifndef DEBUG_RANDOM_AUDIO
+#undef DEBUG_RANDOM_AUDIO
+#endif
+#ifndef DEBUG_RANDOM_CLIENT
+#undef DEBUG_RANDOM_CLIENT
+#endif
+#ifndef DEBUG_RANDOM_LOGIC
+#undef DEBUG_RANDOM_LOGIC
+#endif
+#ifndef DETERMINISTIC
+#undef DETERMINISTIC
+#endif
+
+/*	Logic random-draw trace, for finding a lockstep desync.
+
+	WHY THIS EXISTS SEPARATELY FROM DEBUG_RANDOM_LOGIC
+
+	DEBUG_RANDOM_LOGIC logs through DEBUG_LOG, which needs RTS_DEBUG_LOGGING=ON,
+	and that configuration does not currently COMPILE on Linux: enabling it
+	turns on a chain of debug-only code that has only ever been built by 32-bit
+	MSVC (__int64 in SimpleProfiler, a missing <string.h>, two pointer-to-int
+	truncations, and Windows MEMORYSTATUS fields). Fixing all of that is a
+	separate job from finding a desync.
+
+	This path is deliberately tiny and independent: one FILE*, plain fprintf,
+	no DEBUG_LOG, no subsystem. It therefore works in the RELEASE build every
+	peer already runs, which also means the trace runs at release speed and
+	needs no second binary per machine.
+
+	Only the LOGIC generator is traced, because only the logic generator feeds
+	the CRC that decides a mismatch.
+
+	Enabled at runtime by setting GENERALS_RANDOM_TRACE to a path; unset, the
+	cost is one pointer test per draw. The file is opened on first use and
+	line-buffered, so a killed engine still leaves a usable file.
+
+	    GENERALS_RANDOM_TRACE=/tmp/rng.log ./GeneralsXZH ...
+
+	One line per draw, which is what makes two peers' traces diffable -- the
+	first differing line names the call site that ran on one peer and not the
+	other:
+
+	    <frame> i <value> <lo> <hi> <file>:<line>     integer draw
+	    <frame> r <float-bits-hex> <file>:<line>      real draw
+
+	Compare with `diff`, or find the first difference with
+	`cmp <(...) <(...)`. The Unchanged variants are deliberately NOT traced:
+	they roll a copy of the seed and cannot move the CRC. */
+static FILE *theRandomTraceFile = nullptr;
+static Bool theRandomTraceChecked = FALSE;
+
+static FILE *randomTraceFile( void )
+{
+	if (!theRandomTraceChecked)
+	{
+		theRandomTraceChecked = TRUE;
+		const char *path = getenv("GENERALS_RANDOM_TRACE");
+		if (path != nullptr && path[0] != '\0')
+		{
+			theRandomTraceFile = fopen(path, "w");
+			if (theRandomTraceFile != nullptr)
+				setvbuf(theRandomTraceFile, nullptr, _IOLBF, 0);
+		}
+	}
+	return theRandomTraceFile;
+}
+
+/*	The frame, or -1 before TheGameLogic exists.
+
+	populateRandomSideAndColor draws before frame 0, and a divergence THERE is
+	just as interesting as one mid-match, so those draws are recorded rather
+	than skipped. */
+static Int randomTraceFrame( void )
+{
+	return (TheGameLogic != nullptr) ? (Int)TheGameLogic->getFrame() : -1;
+}
+
+/*	Basename only. The peers may have different source roots -- they are
+	different machines, possibly different architectures -- and an absolute path
+	would make every line differ for no reason. */
+static const char *randomTraceBase( const char *file )
+{
+	const char *base = file;
+	if (file != nullptr)
+	{
+		for (const char *p = file; *p != '\0'; ++p)
+			if (*p == '/' || *p == '\\')
+				base = p + 1;
+	}
+	return (base != nullptr) ? base : "?";
+}
+
+static void traceLogicDraw( Int rval, int lo, int hi, const char *file, int line )
+{
+	FILE *fp = randomTraceFile();
+	if (fp == nullptr)
+		return;
+
+	fprintf(fp, "%d i %d %d %d %s:%d\n",
+		randomTraceFrame(), rval, lo, hi, randomTraceBase(file), line);
+}
+
+static void traceLogicDrawReal( Real rval, const char *file, int line )
+{
+	FILE *fp = randomTraceFile();
+	if (fp == nullptr)
+		return;
+
+	/*	Raw bits, not %f. Two peers must agree EXACTLY, and a decimal rendering
+		can hide a difference in the low mantissa bits -- which is precisely the
+		kind of difference worth seeing. */
+	UnsignedInt bits = 0;
+	memcpy(&bits, &rval, sizeof(bits));
+	fprintf(fp, "%d r %08X %s:%d\n",
+		randomTraceFrame(), bits, randomTraceBase(file), line);
+}
 
 static const Real theMultFactor = 1.0f / static_cast<float>(UINT_MAX);
 
@@ -280,6 +401,8 @@ Int GetGameLogicRandomValue( int lo, int hi, const char *file, int line )
 
 	const Int rval = ((Int)(randomValue(theGameLogicSeed) % delta)) + lo;
 
+	traceLogicDraw(rval, lo, hi, file, line);
+
 #ifdef DEBUG_RANDOM_LOGIC
 	DEBUG_LOG(( "%d: GetGameLogicRandomValue = %d (%d - %d), %s line %d",
 		TheGameLogic->getFrame(), rval, lo, hi, file, line ));
@@ -306,6 +429,8 @@ Real GetGameLogicRandomValueReal( Real lo, Real hi, const char *file, int line )
 #endif
 
 	const Real rval = ((Real)(randomValue(theGameLogicSeed)) * theMultFactor) * delta + lo;
+
+	traceLogicDrawReal(rval, file, line);
 
 #ifdef DEBUG_RANDOM_LOGIC
 	DEBUG_LOG(( "%d: GetGameLogicRandomValueReal = %f, %s line %d",
