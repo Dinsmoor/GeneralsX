@@ -488,8 +488,12 @@ W3DDisplay::~W3DDisplay()
 		W3DShaderManager::shutdown();
 	m_assetManager->Free_Assets();
 	delete m_assetManager;
-	if (!TheGlobalData->m_headless)
-		WW3D::Shutdown();
+	// Unconditional now: headless initialises WW3D in lite mode (see init()),
+	// so it must shut it down too or a second engine in the same process hits
+	// the `assert(IsInitted == false)` at the top of WW3D::Init. Lite mode is
+	// handled inside -- DX8Backend's destructor skips DX8Wrapper::Shutdown when
+	// it never created a device.
+	WW3D::Shutdown();
 	WWMath::Shutdown();
 	if (!TheGlobalData->m_headless)
 		DX8WebBrowser::Shutdown();
@@ -976,7 +980,54 @@ void W3DDisplay::init()
 	m_assetManager->Register_Prototype_Loader(&_AggregateLoader);
 	m_assetManager->Set_WW3D_Load_On_Demand( true );
 
-	if (!TheGlobalData->m_headless)
+	if (TheGlobalData->m_headless)
+	{
+		/*	Headless still needs WW3D, in LITE mode.
+
+			Without WW3D::Init, W3DAssetManager::Create_Render_Obj returns NULL
+			for EVERY model. That is silent -- the DEBUG_ASSERTCRASH beside it is
+			compiled out of a release build -- and it desyncs multiplayer:
+			ModelConditionInfo::validateCachedBones loads a temporary render
+			object purely to read a skeleton, gets NULL, and leaves
+			m_pristineBones empty. getPristineBonePositions then returns 0, so
+			TransitionDamageFX's getLocalEffectPos bails at `boneCount == 0` and
+			never reaches its GameLogicRandomValue. A rendering peer DOES reach
+			it, so the two peers consume a different number of logic random
+			values and the match falls apart on first contact.
+
+			Measured on a bot-hosted LAN match: 182 trace lines byte-identical,
+			then one extra client draw at TransitionDamageFX.cpp:293, and the
+			mismatch 24 frames later. On the host, every single model load
+			logged NULL.
+
+			`lite` is the engine's own device-free mode and is exactly this case:
+			DX8Wrapper::Init wraps the whole D3D block -- the libdxvk_d3d8 load,
+			Direct3DCreate8, Enumerate_Devices -- in `if (!lite)` and otherwise
+			just zeroes state and returns true; WW3D::Init skips dazzles and the
+			animated sound manager; DX8Backend's destructor skips
+			DX8Wrapper::Shutdown. So this gives a working asset manager with no
+			window, no GPU and no DXVK.
+
+			Bone positions are NOT a rendering detail. They are logic state that
+			happens to live behind a client interface: validateCachedBones
+			refuses to run outside a logic update (isValidTimeToCalcLogicStuff)
+			and calls setFPMode, and W3DModelDraw carries a leftover assert
+			reading "Calc'ing logic bone pos in client!!!". A peer that cannot
+			read them is not a faster client, it is a different simulation.
+
+			Retail compatibility is preserved BY doing this, not threatened by
+			it: a retail client loads these models and takes that draw, so the
+			fix removes a divergence rather than adding one. No draw is added,
+			removed or reordered. */
+		const WW3DErrorType liteResult = WW3D::Init( nullptr, nullptr, /*lite=*/true );
+		if (liteResult != WW3D_ERROR_OK)
+		{
+			fprintf(stderr, "ERROR: W3DDisplay::init() - headless WW3D::Init(lite) failed: %d\n",
+				(int)liteResult);
+			fflush(stderr);
+		}
+	}
+	else
 	{
 
 		if (TheGlobalData->m_incrementalAGPBuf)
