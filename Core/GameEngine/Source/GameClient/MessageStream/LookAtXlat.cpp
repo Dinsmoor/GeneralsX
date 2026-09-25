@@ -117,6 +117,13 @@ Bool LookAtTranslator::canScrollAtScreenEdge() const
 	if (!TheMouse->isCursorCaptured())
 		return false;
 
+	// -followcamera: the replay's camera track is driving the view (a bot's
+	// point of view). A pointer resting on a screen edge -- an unattended
+	// virtual screen's pointer starts in a corner -- would scroll the view away
+	// from it every frame.
+	if (TheGlobalData->m_followReplayCamera && TheRecorder && TheRecorder->isPlaybackMode())
+		return false;
+
 #ifdef _WIN32
 	if (TheDisplay->getWindowed())
 	{
