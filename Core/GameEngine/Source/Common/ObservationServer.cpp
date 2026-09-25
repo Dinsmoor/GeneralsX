@@ -999,8 +999,11 @@ void ObservationServer::buildMapDescription()
 
 			// Faction and rank placeholders sit in the same store; only what this
 			// player could actually buy right now is flagged purchasable.
-			snprintf(chunk, sizeof(chunk), "{\"name\":\"%.48s\",\"cost\":%d,\"purchasable\":%d}",
-				sciNames[i].str(), TheScienceStore->getSciencePurchaseCost(st),
+			// "id" is the ScienceType, which is the name's interned KEY, not
+			// an index: it is what MSG_PURCHASE_SCIENCE carries in a replay,
+			// so the corpus tools resolve a purchase by it.
+			snprintf(chunk, sizeof(chunk), "{\"name\":\"%.48s\",\"id\":%d,\"cost\":%d,\"purchasable\":%d}",
+				sciNames[i].str(), (Int)st, TheScienceStore->getSciencePurchaseCost(st),
 				(observing != nullptr && observing->isCapableOfPurchasingScience(st)) ? 1 : 0);
 			body += chunk;
 		}
