@@ -1,3 +1,49 @@
+> ## About this fork: an external bot interface for Zero Hour
+>
+> This branch (`bot-port`) is GeneralsX with one addition: a way for a
+> separate program to **play Zero Hour through the engine the same way a person
+> does**. The engine reports what that player could see on screen, and accepts
+> the orders a player could give with a mouse and keyboard. The bot itself lives
+> in its own repository and talks to the engine over two local sockets.
+> Nothing here lets it see through the fog of war or conjure money; the one
+> exception is a testing mode that exists only when the engine is started with
+> `-sandbox`, which a real match never is.
+>
+> **What was added**
+> - An observation server and an action server (`-obsport`, `-actport`): the
+>   world as the bot's player sees it, and every order a player can give,
+>   including building, research, generals' powers and chat.
+> - Headless skirmish matches from the command line (`-skirmish`, `-headless`),
+>   and joining a LAN game from a config file (`-botconfig`), so bots can be
+>   tested at many times real speed without a window.
+> - Several bot instances on **one machine joining the same LAN game**: each
+>   can use its own lobby port, and players are told apart by address *and*
+>   port instead of by address alone. (Tested with six headless bots on one
+>   machine joining a game hosted on another.)
+>
+> **What was fixed along the way**
+> - A headless engine crashed the moment anyone fired a generals' power,
+>   because the announcer and the command bar are not there without a screen.
+> - Several ways a bot's engine drifted out of sync with a person's: a burst of
+>   orders in one frame, a "can I get there?" question that ran a real path
+>   search, and cosmetic damage effects that used the game-logic random numbers
+>   (the fix for that last one is TheSuperHackers' own, ported here).
+>
+> **Compatibility, plainly.** These changes are additive: the LAN packets are
+> the same bytes, the default ports are the stock ones, and the game rules are
+> untouched. But GeneralsX itself is built with a modern compiler and does not
+> stay in sync with the stock 1.04 game, so **this fork cannot play against a
+> stock client either** -- every player needs a GeneralsX-based build. Its
+> random-number fix also means that, in the default build, it will not stay in
+> sync with *unmodified* GeneralsX once that effect fires. Playing against stock
+> 1.04 needs the same bot work on a Visual C++ 6 build of TheSuperHackers'
+> engine, which is where this project started (kept as tags `archive/vc6-*`).
+>
+> Upstream GeneralsX, unchanged, is on this fork's `main` branch. Its own
+> introduction follows.
+
+---
+
 <p align="center">
   <img src="assets/generalsx-zh_icon.png" alt="GeneralsX Logo" width="128" height="128">
 </p>
