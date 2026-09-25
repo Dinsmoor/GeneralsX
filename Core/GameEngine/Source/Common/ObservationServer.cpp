@@ -1852,6 +1852,12 @@ void ObservationServer::buildObservation( std::string &out )
 			out += scratch.str();
 		}
 		const ContainModuleInterface *contain = obj->getContain();
+		// A GLA tunnel (TunnelContain, so the Sneak Attack tunnel too): every
+		// tunnel of a player is one network of MaxTunnelCapacity (10) shared
+		// slots, and a unit that goes in at one can leave from any other.
+		// "contained" on a tunnel is therefore the whole network's count.
+		if (contain != nullptr && contain->isTunnelContain())
+			out += ",\"tunnel\":1";
 		if (contain != nullptr && contain->getContainCount() > 0)
 		{
 			scratch.format(",\"contained\":%u", contain->getContainCount());
@@ -2024,6 +2030,24 @@ void ObservationServer::buildObservation( std::string &out )
 					: obj->testWeaponSetFlag(WEAPONSET_CRATEUPGRADE_ONE) ? 1 : 0;
 				scratch.format(",\"junk\":%d", junk);
 				out += scratch.str();
+			}
+
+			// "slave": bound to a master (SlavedUpdate with a slaver): a Stinger
+			// Site's soldiers, a tunnel's two RPG troopers, an Angry Mob's
+			// members. They stay with their master -- the soldiers ignore
+			// orders outright, the tunnel's troopers are leashed to it, the mob
+			// moves with its Nexus -- so the bot must not count them as an
+			// army it can send anywhere.
+			{
+				for (BehaviorModule **m = obj->getBehaviorModules(); m != nullptr && *m != nullptr; ++m)
+				{
+					SlavedUpdateInterface *sl = (*m)->getSlavedUpdateInterface();
+					if (sl != nullptr && sl->getSlaverID() != INVALID_ID)
+					{
+						out += ",\"slave\":1";
+						break;
+					}
+				}
 			}
 
 			// "cs": this object's command set, ONLY when an upgrade has swapped
