@@ -114,6 +114,13 @@ static const KindOfType KIND_BITS[] = {
 	// SALVAGER (Crate.ini SalvageCrateData, KilledByType = SALVAGER), and
 	// only a WEAPON_SALVAGER turns a crate into a weapon tier.
 	KINDOF_SALVAGER, KINDOF_WEAPON_SALVAGER,
+	// Three the bot asked for and never got, so every test of them read
+	// False without a word (found 2026-09-25 by auditing every kind name the
+	// bot uses against this list): FS_AIRFIELD (both factions' airfields
+	// carry it; its absence once kept the bot from ever building aircraft),
+	// DRONE (drones cannot be sniped or crewed), MINE (dozers and workers
+	// detect only these). The mask is 32 bits: 30 used.
+	KINDOF_FS_AIRFIELD, KINDOF_DRONE, KINDOF_MINE,
 };
 static const char *const KIND_BIT_NAMES[] = {
 	"STRUCTURE", "INFANTRY", "VEHICLE", "AIRCRAFT",
@@ -125,8 +132,13 @@ static const char *const KIND_BIT_NAMES[] = {
 	"CAPTURABLE", "TECH_BASE_DEFENSE", "REPAIR_PAD",
 	"GARRISONABLE", "FS_SUPERWEAPON",
 	"SALVAGER", "WEAPON_SALVAGER",
+	"FS_AIRFIELD", "DRONE", "MINE",
 };
 static const Int KIND_BIT_COUNT = sizeof(KIND_BITS) / sizeof(KIND_BITS[0]);
+// "k" is a 32-bit mask, and the names are the client's only key to it.
+static_assert(sizeof(KIND_BITS) / sizeof(KIND_BITS[0]) <= 32, "kind mask is 32 bits");
+static_assert(sizeof(KIND_BITS) / sizeof(KIND_BITS[0]) == sizeof(KIND_BIT_NAMES) / sizeof(KIND_BIT_NAMES[0]),
+              "every exported kind bit needs its name");
 
 static UnsignedInt kindMask( const ThingTemplate *t )
 {
