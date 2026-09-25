@@ -41,6 +41,7 @@
 #include "Common/NameKeyGenerator.h"
 #include "GameLogic/Weapon.h"
 #include "GameLogic/WeaponSet.h"
+#include "GameLogic/Module/CollideModule.h"
 #include "GameLogic/Armor.h"
 #include "GameLogic/ArmorSet.h"
 #include "GameLogic/Damage.h"
@@ -108,6 +109,10 @@ static const KindOfType KIND_BITS[] = {
 	// Overlord -- were never even seen. Tyler, 2026-09-17, on a match
 	// where the silo stood with the missile ready the whole time.
 	KINDOF_FS_SUPERWEAPON,
+	// GLA salvage. A vehicle only drops a junk crate when its killer is a
+	// SALVAGER (Crate.ini SalvageCrateData, KilledByType = SALVAGER), and
+	// only a WEAPON_SALVAGER turns a crate into a weapon tier.
+	KINDOF_SALVAGER, KINDOF_WEAPON_SALVAGER,
 };
 static const char *const KIND_BIT_NAMES[] = {
 	"STRUCTURE", "INFANTRY", "VEHICLE", "AIRCRAFT",
@@ -118,6 +123,7 @@ static const char *const KIND_BIT_NAMES[] = {
 	"TECH_BUILDING", "HERO", "PROJECTILE",
 	"CAPTURABLE", "TECH_BASE_DEFENSE", "REPAIR_PAD",
 	"GARRISONABLE", "FS_SUPERWEAPON",
+	"SALVAGER", "WEAPON_SALVAGER",
 };
 static const Int KIND_BIT_COUNT = sizeof(KIND_BITS) / sizeof(KIND_BITS[0]);
 
@@ -1627,8 +1633,25 @@ void ObservationServer::buildObservation( std::string &out )
 	Bool first = TRUE;
 	for (Object *obj = TheGameLogic->getFirstObject(); obj; obj = obj->getNextObject())
 	{
+		// A GLA salvage crate: neutral, lives 30-35 seconds, and only a GLA
+		// vehicle can pick it up. Identified by its collide module, not its
+		// name, so a mod's crate reads the same.
+		Bool salvageCrate = FALSE;
+		for (BehaviorModule **m = obj->getBehaviorModules(); m != nullptr && *m != nullptr; ++m)
+		{
+			CollideModuleInterface *ci = (*m)->getCollide();
+			if (ci != nullptr && ci->isSalvageCrateCollide())
+			{
+				salvageCrate = TRUE;
+				break;
+			}
+		}
+
 		// Dead objects linger for a frame or two while their death modules run.
-		if (obj->isEffectivelyDead())
+		// EXCEPT crates: they have no body, so they get an InactiveBody, which
+		// marks them effectively dead from birth (so nothing can shoot them).
+		// This filter therefore hid every crate the bot could ever have seen.
+		if (obj->isEffectivelyDead() && !salvageCrate)
 			continue;
 
 		const ThingTemplate *tmpl = obj->getTemplate();
@@ -1969,6 +1992,9 @@ void ObservationServer::buildObservation( std::string &out )
 		// returns a stored frame) -- nothing here may touch
 		// GameLogicRandomValue. Both only change when the state does, so they
 		// cost nothing in a delta frame.
+		if (salvageCrate)
+			out += ",\"crate\":\"salvage\"";
+
 		if (isOwn)
 		{
 			Bool firstUp = TRUE;
@@ -1984,6 +2010,18 @@ void ObservationServer::buildObservation( std::string &out )
 			}
 			if (!firstUp)
 				out += ']';
+
+			// "junk": how many salvage weapon tiers this vehicle has picked
+			// up (0-2). A crate gives the next tier until both are taken,
+			// then only a chance of veterancy or $25-75 -- so the crate is
+			// worth most to the vehicle with the fewest.
+			if (obj->isKindOf(KINDOF_WEAPON_SALVAGER))
+			{
+				const Int junk = obj->testWeaponSetFlag(WEAPONSET_CRATEUPGRADE_TWO) ? 2
+					: obj->testWeaponSetFlag(WEAPONSET_CRATEUPGRADE_ONE) ? 1 : 0;
+				scratch.format(",\"junk\":%d", junk);
+				out += scratch.str();
+			}
 
 			// "cs": this object's command set, ONLY when an upgrade has swapped
 			// it from its template's (a GLA Worker toggled to fake buildings).
