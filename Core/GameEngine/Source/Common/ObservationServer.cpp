@@ -1993,6 +1993,11 @@ void ObservationServer::buildObservation( std::string &out )
 		// because something of ours is detecting it, and that can lapse.
 		if (obj->testStatus(OBJECT_STATUS_STEALTHED) && !shownDisguised)
 			out += ",\"stealthed\":1";
+		// A vehicle whose crew was sniped (Jarmen Kell) or killed by neutron
+		// shells: it turns gray and neutral, and any infantry can take it
+		// (ActionManager::canEnterObject). A player sees the gray husk.
+		if (obj->isDisabledByType(DISABLED_UNMANNED))
+			out += ",\"unmanned\":1";
 		// Our own (or an ally's) stealthed unit that an enemy has found: the
 		// owner sees it drawn STEALTHLOOK_VISIBLE_FRIENDLY_DETECTED, the
 		// detection overlay "as a warning", and gets a "stealth neutralized"
