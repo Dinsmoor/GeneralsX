@@ -75,8 +75,7 @@
 > ### Building it on Linux (x86_64 and aarch64)
 >
 > We only run this on Linux. It builds and plays on both ordinary PCs (x86_64)
-> and ARM machines (aarch64); ours are an Ubuntu 26.04 desktop (GCC 15, CMake
-> 4.2) and an Ubuntu 24.04 NVIDIA DGX Spark (GCC 13.3, CMake 3.28).
+> and ARM machines (aarch64), with GCC 13 to 15 and CMake 3.28 or newer.
 >
 > **Packages** (Ubuntu names):
 >
@@ -92,8 +91,9 @@
 > **vcpkg**, which fetches the libraries the engine is built against:
 >
 > ```
-> git clone https://github.com/microsoft/vcpkg ~/vcpkg && ~/vcpkg/bootstrap-vcpkg.sh
-> export VCPKG_ROOT=~/vcpkg
+> git clone https://github.com/microsoft/vcpkg <vcpkg-dir>
+> <vcpkg-dir>/bootstrap-vcpkg.sh
+> export VCPKG_ROOT=<vcpkg-dir>
 > export VCPKG_FORCE_SYSTEM_BINARIES=1   # aarch64: use the system cmake and ninja
 > ```
 >
@@ -102,7 +102,7 @@
 > ```
 > cmake --preset linux64-deploy
 > cmake --build build/linux64-deploy --target z_generals
-> scripts/build/linux/deploy-linux-zh.sh     # copies the game and its libraries to ~/GeneralsX/GeneralsZH
+> scripts/build/linux/deploy-linux-zh.sh     # copies the game and its libraries into your game folder
 > ```
 >
 > **On aarch64, build DXVK yourself.** DXVK turns the game's Direct3D 8 into
@@ -111,19 +111,20 @@
 >
 > ```
 > sudo apt install meson glslang-tools
-> git clone --branch v2.6 --recurse-submodules https://github.com/doitsujin/dxvk ~/src/dxvk
-> cd ~/src/dxvk
-> PKG_CONFIG_PATH=<this repo>/build/linux64-deploy/_deps/sdl3-build \
->   meson setup build.native --buildtype release --prefix ~/src/dxvk-native-arm64 -Ddxvk_native_wsi=sdl3
+> git clone --branch v2.6 --recurse-submodules https://github.com/doitsujin/dxvk
+> cd dxvk
+> PKG_CONFIG_PATH=<this-repo>/build/linux64-deploy/_deps/sdl3-build \
+>   meson setup build.native --buildtype release --prefix "$PWD/install" -Ddxvk_native_wsi=sdl3
 > ninja -C build.native install
-> cp -a ~/src/dxvk-native-arm64/lib/aarch64-linux-gnu/libdxvk_d3d{8,9}.so* ~/GeneralsX/GeneralsZH/
+> cp -a install/lib/aarch64-linux-gnu/libdxvk_d3d{8,9}.so* <game-folder>/
 > ```
 >
 > (Do this again after every `deploy-linux-zh.sh`, which puts the x86_64 copy back.)
 >
 > **Game files.** You need your own copy of the game: the Zero Hour files in
-> `~/GeneralsX/GeneralsZH`, and the original Generals files in
-> `~/GeneralsX/Generals` (or point `CNC_GENERALS_PATH` at them). Both are
+> the game folder `deploy-linux-zh.sh` installs into, and the original Generals
+> files where GeneralsX looks for them (or point `CNC_GENERALS_PATH` at them;
+> see the GeneralsX documentation below). Both are
 > required -- a machine missing the original Generals models goes out of step
 > silently, the same way a machine with no graphics does.
 >
@@ -131,10 +132,13 @@
 >
 > ```
 > Xvfb :99 -screen 0 1280x720x24 &
-> cd ~/GeneralsX/GeneralsZH && DISPLAY=:99 ./GeneralsXZH -win ...
+> cd <game-folder> && DISPLAY=:99 ./GeneralsXZH -win ...
 > ```
 >
 > or with no graphics at all, for bot-only games: `./GeneralsXZH -headless ...`
+>
+> (`<vcpkg-dir>`, `<this-repo>` and `<game-folder>` are wherever those live on
+> your machine.)
 >
 > Upstream GeneralsX, unchanged, is on this fork's `main` branch. Its own
 > introduction follows.
