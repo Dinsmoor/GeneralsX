@@ -29,15 +29,112 @@
 >   search, and cosmetic damage effects that used the game-logic random numbers
 >   (the fix for that last one is TheSuperHackers' own, ported here).
 >
-> **Compatibility, plainly.** These changes are additive: the LAN packets are
-> the same bytes, the default ports are the stock ones, and the game rules are
-> untouched. But GeneralsX itself is built with a modern compiler and does not
-> stay in sync with the stock 1.04 game, so **this fork cannot play against a
-> stock client either** -- every player needs a GeneralsX-based build. Its
-> random-number fix also means that, in the default build, it will not stay in
-> sync with *unmodified* GeneralsX once that effect fires. Playing against stock
-> 1.04 needs the same bot work on a Visual C++ 6 build of TheSuperHackers'
-> engine, which is where this project started (kept as tags `archive/vc6-*`).
+> ### Staying in sync with other players
+>
+> Zero Hour multiplayer is "lockstep": every machine runs the whole game
+> itself and only orders travel over the network. For that to work, every
+> machine has to make exactly the same decisions, including drawing the same
+> random numbers in the same order. If one machine draws one extra number, the
+> games drift apart and the match ends with a mismatch.
+>
+> **What we keep identical.** The LAN packets are the same bytes as the stock
+> game, the default ports are the stock ones, and the game rules are untouched.
+> Everything the bot needs was added beside the game, not changed inside it.
+>
+> **The one hard case: running without a screen.** A few visual effects -- smoke
+> on a damaged tank, sparks from an EMP -- pick a random spot on the 3D model,
+> and in the original game that pick uses the *game's* random numbers. A machine
+> that never loads the 3D models (a bot running with no graphics) cannot make
+> that pick, so it falls out of step with everyone who can. We hit exactly this,
+> and it took two weeks to pin down.
+>
+> There are two ways to deal with it, and this fork uses them for different jobs:
+>
+> 1. **Bots among bots (the default).** The fix TheSuperHackers wrote: those
+>    visual picks use a separate, local-only random source. Every machine running
+>    this fork agrees with every other one, with or without graphics. The cost is
+>    that it no longer matches the stock game's random sequence.
+> 2. **Playing retail-mode builds (in progress).** To stay in step with the stock
+>    1.04 game, or with a GeneralsX or TheSuperHackers build compiled in its
+>    retail-compatible mode, the bot's engine runs as a *real graphical client*
+>    at the lowest resolution and quality, even on a machine with no monitor, so
+>    it loads the models and makes the same picks as everyone else. On a machine
+>    with no monitor it draws into an invisible screen (Xvfb). This is confirmed
+>    to render on both x86_64 and ARM (aarch64); proving it makes exactly the same
+>    random draws as a normal client is the next step.
+>
+> **Two limits worth knowing.** GeneralsX is built with a modern compiler, and
+> its own build warns that only a Visual C++ 6 build stays compatible with the
+> retail game, so no GeneralsX-based build -- this one included -- can play the
+> stock 1.04 game today. And in the default mode above, this fork
+> does not stay in step with *unmodified* GeneralsX once one of those effects
+> fires. Everything the bot does talks to the engine over two sockets, so it
+> can be moved to a Visual C++ 6 build of TheSuperHackers' engine (where this
+> project started; see the `archive/vc6-*` tags) if that is ever needed.
+>
+> ### Building it on Linux (x86_64 and aarch64)
+>
+> We only run this on Linux. It builds and plays on both ordinary PCs (x86_64)
+> and ARM machines (aarch64); ours are an Ubuntu 26.04 desktop (GCC 15, CMake
+> 4.2) and an Ubuntu 24.04 NVIDIA DGX Spark (GCC 13.3, CMake 3.28).
+>
+> **Packages** (Ubuntu names):
+>
+> ```
+> sudo apt install build-essential cmake ninja-build git curl zip unzip tar pkg-config
+> sudo apt install nasm              # x86_64 only
+> sudo apt install xvfb              # only to render on a machine with no monitor
+> ```
+>
+> You also need a Vulkan driver for your GPU (the normal NVIDIA/AMD/Intel driver)
+> if the engine is going to draw anything.
+>
+> **vcpkg**, which fetches the libraries the engine is built against:
+>
+> ```
+> git clone https://github.com/microsoft/vcpkg ~/vcpkg && ~/vcpkg/bootstrap-vcpkg.sh
+> export VCPKG_ROOT=~/vcpkg
+> export VCPKG_FORCE_SYSTEM_BINARIES=1   # aarch64: use the system cmake and ninja
+> ```
+>
+> **Build and install:**
+>
+> ```
+> cmake --preset linux64-deploy
+> cmake --build build/linux64-deploy --target z_generals
+> scripts/build/linux/deploy-linux-zh.sh     # copies the game and its libraries to ~/GeneralsX/GeneralsZH
+> ```
+>
+> **On aarch64, build DXVK yourself.** DXVK turns the game's Direct3D 8 into
+> Vulkan, and the copy the build downloads is x86_64 only, so on ARM the game
+> cannot draw until you replace it:
+>
+> ```
+> sudo apt install meson glslang-tools
+> git clone --branch v2.6 --recurse-submodules https://github.com/doitsujin/dxvk ~/src/dxvk
+> cd ~/src/dxvk
+> PKG_CONFIG_PATH=<this repo>/build/linux64-deploy/_deps/sdl3-build \
+>   meson setup build.native --buildtype release --prefix ~/src/dxvk-native-arm64 -Ddxvk_native_wsi=sdl3
+> ninja -C build.native install
+> cp -a ~/src/dxvk-native-arm64/lib/aarch64-linux-gnu/libdxvk_d3d{8,9}.so* ~/GeneralsX/GeneralsZH/
+> ```
+>
+> (Do this again after every `deploy-linux-zh.sh`, which puts the x86_64 copy back.)
+>
+> **Game files.** You need your own copy of the game: the Zero Hour files in
+> `~/GeneralsX/GeneralsZH`, and the original Generals files in
+> `~/GeneralsX/Generals` (or point `CNC_GENERALS_PATH` at them). Both are
+> required -- a machine missing the original Generals models goes out of step
+> silently, the same way a machine with no graphics does.
+>
+> **Running with no monitor**, as a real graphical client:
+>
+> ```
+> Xvfb :99 -screen 0 1280x720x24 &
+> cd ~/GeneralsX/GeneralsZH && DISPLAY=:99 ./GeneralsXZH -win ...
+> ```
+>
+> or with no graphics at all, for bot-only games: `./GeneralsXZH -headless ...`
 >
 > Upstream GeneralsX, unchanged, is on this fork's `main` branch. Its own
 > introduction follows.
