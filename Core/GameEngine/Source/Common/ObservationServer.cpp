@@ -749,8 +749,21 @@ void ObservationServer::buildMapDescription()
 			if (cost <= 0)
 				continue;
 
+			// A template with BuildVariations (the GLA Technical) is a hollow
+			// shell: ordering it produces one of its variations, and the shell
+			// itself carries no body and no weapons. Describe it by its first
+			// variation -- they are functionally identical -- and name them
+			// all below, so the bot can count what comes out as what it ordered.
+			const ThingTemplate *st = t;
+			if (!t->getBuildVariations().empty())
+			{
+				const ThingTemplate *v = TheThingFactory->findTemplate(t->getBuildVariations()[0]);
+				if (v != nullptr)
+					st = v;
+			}
+
 			Int armorIdx = -1;
-			const ArmorTemplateSet *aset = t->findArmorTemplateSet(ArmorSetFlags());
+			const ArmorTemplateSet *aset = st->findArmorTemplateSet(ArmorSetFlags());
 			const ArmorTemplate *armor = aset ? aset->getArmorTemplate() : nullptr;
 			if (armor != nullptr)
 			{
@@ -781,7 +794,7 @@ void ObservationServer::buildMapDescription()
 			AsciiString weapons;
 			weapons.concat(",\"weapons\":[");
 			{
-				const WeaponTemplateSetVector &allSets = t->getWeaponTemplateSets();
+				const WeaponTemplateSetVector &allSets = st->getWeaponTemplateSets();
 				Bool firstW = TRUE;
 				if (!allSets.empty())
 				{
@@ -820,7 +833,7 @@ void ObservationServer::buildMapDescription()
 			}
 			weapons.concat("]");
 
-			const WeaponTemplateSetVector &wsets = t->getWeaponTemplateSets();
+			const WeaponTemplateSetVector &wsets = st->getWeaponTemplateSets();
 			if (!wsets.empty())
 			{
 				const WeaponTemplate *w = wsets[0].getNth(PRIMARY_WEAPON);
@@ -877,7 +890,7 @@ void ObservationServer::buildMapDescription()
 			// client can tell "drive over this" from "shoot this".
 			Int squishable = 0;
 			{
-				const ModuleInfo &mi = t->getBehaviorModuleInfo();
+				const ModuleInfo &mi = st->getBehaviorModuleInfo();
 				for (Int sIdx = 0; sIdx < mi.getCount(); ++sIdx)
 				{
 					if (strcmp(mi.getNthName(sIdx).str(), "SquishCollide") == 0)
@@ -888,7 +901,7 @@ void ObservationServer::buildMapDescription()
 				}
 			}
 			{
-				const ModuleInfo &mi = t->getBehaviorModuleInfo();
+				const ModuleInfo &mi = st->getBehaviorModuleInfo();
 				for (Int mIdx = 0; mIdx < mi.getCount(); ++mIdx)
 				{
 					const AsciiString mName = mi.getNthName(mIdx);
@@ -903,7 +916,7 @@ void ObservationServer::buildMapDescription()
 				}
 			}
 
-			const GeometryInfo &geom = t->getTemplateGeometryInfo();
+			const GeometryInfo &geom = st->getTemplateGeometryInfo();
 			snprintf(chunk, sizeof(chunk), "{\"type\":\"%.48s\",\"tid\":%d,\"cost\":%d,\"build_frames\":%d,\"prereqs_met\":%d,"
 				"\"k\":%u,\"footprint\":[%.0f,%.0f],\"range\":%.0f,"
 				"\"armor\":%d,\"dmg\":%d,\"damage\":%.0f,\"shot_ms\":%d,\"anti\":%d,"
@@ -920,13 +933,24 @@ void ObservationServer::buildMapDescription()
 				t->getName().str(), (Int)t->getTemplateID(), cost, t->calcTimeToBuild(observing),
 				observing->canBuild(t) ? 1 : 0,
 				kindMask(t), geom.getMajorRadius(), geom.getMinorRadius(),
-				templateRange(t), armorIdx, dmgIdx, damage, shotDelay, anti,
+				templateRange(st), armorIdx, dmgIdx, damage, shotDelay, anti,
 				clipSize, clipReload, splash, minRange, scatter, maxHealth,
-				(Int)t->getCrusherLevel(), (Int)t->getCrushableLevel(), squishable,
+				(Int)st->getCrusherLevel(), (Int)st->getCrushableLevel(), squishable,
 				(Int)t->getEnergyProduction());
 			// Splice the weapons array in before the closing brace.
 			body.append(chunk, strlen(chunk) - 1);
 			body += weapons.str();
+			if (!t->getBuildVariations().empty())
+			{
+				body += ",\"variations\":[";
+				const std::vector<AsciiString> &vars = t->getBuildVariations();
+				for (size_t vi = 0; vi < vars.size(); ++vi)
+				{
+					snprintf(chunk, sizeof(chunk), "%s\"%.48s\"", vi ? "," : "", vars[vi].str());
+					body += chunk;
+				}
+				body += ']';
+			}
 			body += '}';
 		}
 		body += ']';
@@ -1960,6 +1984,17 @@ void ObservationServer::buildObservation( std::string &out )
 			}
 			if (!firstUp)
 				out += ']';
+
+			// "cs": this object's command set, ONLY when an upgrade has swapped
+			// it from its template's (a GLA Worker toggled to fake buildings).
+			// A bot that caches buttons per TYPE otherwise believes every Worker
+			// offers what one does, and hands a real build to a Worker that can
+			// only place decoys.
+			if (obj->getCommandSetString() != obj->getTemplate()->friend_getCommandSetString())
+			{
+				scratch.format(",\"cs\":\"%s\"", obj->getCommandSetString().str());
+				out += scratch.str();
+			}
 
 			Bool firstSp = TRUE;
 			for (BehaviorModule **m = obj->getBehaviorModules(); m != nullptr && *m != nullptr; ++m)

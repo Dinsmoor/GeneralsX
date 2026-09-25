@@ -29,6 +29,7 @@
 #include "GameLogic/AIPathfind.h"
 #include "GameLogic/TerrainLogic.h"
 #include "GameLogic/Module/AIUpdate.h"
+#include "GameLogic/Module/ProductionUpdate.h"
 #include "Common/BuildAssistant.h"
 #include "Common/ProductionPrerequisite.h"
 #include "GameClient/ControlBar.h"
@@ -791,6 +792,44 @@ void ActionServer::executeLine( const char *line )
 		return;
 	}
 
+	if (strcmp(verb, "grant") == 0)
+	{
+		// Money, general's rank and science points from nothing, for the tech
+		// crawl (bots/techcrawl.py): a run that proves every building, unit,
+		// upgrade and science of a faction can be REACHED through the bot's
+		// own orders. Reaching the top of the tree honestly takes a won war,
+		// which is a different test. Gated behind -sandbox like spawn, for
+		// the same reason: it desyncs any peer that did not do it too.
+		if (!TheGlobalData->m_combatSandbox)
+		{
+			reply("error", "grant requires the engine to be started with -sandbox");
+			return;
+		}
+		Int owner = playerIndex(), money = 0, rank = 0, points = 0;
+		readInt(line, "player", owner);
+		readInt(line, "money", money);
+		readInt(line, "rank", rank);
+		readInt(line, "science_points", points);
+		Player *forWhom = (ThePlayerList != nullptr)
+			? ThePlayerList->getNthPlayer(owner) : nullptr;
+		if (forWhom == nullptr)
+		{
+			reply("error", "grant: no such player");
+			return;
+		}
+		if (money > 0)
+			forWhom->getMoney()->deposit((UnsignedInt)money, FALSE, FALSE);
+		if (rank > forWhom->getRankLevel())
+			forWhom->setRankLevel(rank);
+		if (points > 0)
+			forWhom->addSciencePurchasePoints(points);
+		AsciiString note;
+		note.format("grant money=%d rank=%d points=%d", money,
+			forWhom->getRankLevel(), forWhom->getSciencePurchasePoints());
+		reply("ok", note.str());
+		return;
+	}
+
 	// ---- orders taking a location ----------------------------------------
 
 	if (strcmp(verb, "move") == 0 ||
@@ -1048,6 +1087,37 @@ void ActionServer::executeLine( const char *line )
 		{
 			reply("error", "build_unit needs a producer id");
 			return;
+		}
+
+		// ProductionUpdate::queueCreateUnit drops an order it cannot honour
+		// without a word: a missing prerequisite, a unit already at its limit
+		// (Burton, Black Lotus), or an airfield with no free parking. So the
+		// same checks are asked here first, read-only, and the reason goes
+		// back to the bot instead of an "ok" for an order that never happens.
+		// tmp/crawl1-usa_hard: Auroras "trained" for ten minutes this way.
+		if (strcmp(verb, "build_unit") == 0 && TheGameLogic != nullptr)
+		{
+			Object *pobj = TheGameLogic->findObjectByID((ObjectID)producer);
+			ProductionUpdateInterface *pu = pobj ? pobj->getProductionUpdateInterface() : nullptr;
+			if (pobj == nullptr || pu == nullptr)
+			{
+				reply("error", "build_unit: producer does not exist or cannot produce");
+				return;
+			}
+			CanMakeType why = TheBuildAssistant->canMakeUnit(pobj, tmpl);
+			if (why == CANMAKE_OK)
+				why = pu->canQueueCreateUnit(tmpl);
+			if (why != CANMAKE_OK)
+			{
+				static const char *const names[] = { "ok", "no_prereq", "no_money",
+					"factory_disabled", "queue_full", "parking_full", "maxed_out" };
+				AsciiString note;
+				note.format("build_unit refused: %s %s",
+					((Int)why >= 0 && (Int)why < 7) ? names[(Int)why] : "unknown",
+					tmpl->getName().str());
+				reply("refused", note.str());
+				return;
+			}
 		}
 
 		GameMessage *sel = beginMessage(GameMessage::MSG_CREATE_SELECTED_GROUP_NO_SOUND);
