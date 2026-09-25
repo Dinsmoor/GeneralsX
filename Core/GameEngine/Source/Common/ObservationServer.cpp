@@ -46,6 +46,7 @@
 #include "GameLogic/ArmorSet.h"
 #include "GameLogic/Damage.h"
 #include "GameLogic/Module/ContainModule.h"
+#include "GameLogic/Module/StealthUpdate.h"
 #include "GameLogic/Module/SupplyWarehouseDockUpdate.h"
 #include <string>
 
@@ -1690,10 +1691,71 @@ void ObservationServer::buildObservation( std::string &out )
 			if (shroud == OBJECTSHROUD_SHROUDED || shroud == OBJECTSHROUD_INVALID)
 				continue;
 
-			// A stealthed enemy is invisible unless something of ours detects it.
+			// A stealthed enemy is invisible unless something detects it
+			// (DETECTED is one status for everybody: an ally's detector
+			// reveals it to us too, exactly as on a player's screen).
+			// Except a unit that DISGUISES (the Bomb Truck): it is never
+			// hidden, it is drawn as something else -- StealthUpdate::
+			// calcStealthedStatusForPlayer returns NONE for it undisguised
+			// and DISGUISED_ENEMY when disguised. Dropping it here made
+			// every enemy Bomb Truck invisible, disguised or not.
+			const StealthUpdate *st = obj->getStealth();
+			const Bool disguiser = (st != nullptr && st->canDisguise());
 			if (obj->testStatus(OBJECT_STATUS_STEALTHED) &&
-					!obj->testStatus(OBJECT_STATUS_DETECTED))
+					!obj->testStatus(OBJECT_STATUS_DETECTED) && !disguiser)
 				continue;
+
+			// Nor are the men inside a building that hides its garrison:
+			// one held only by stealthy garrisoners (KINDOF_STEALTH_
+			// GARRISON: Pathfinder, Jarmen Kell, Hijacker) still shows its
+			// original owner to non-allies until one of them is detected
+			// (GarrisonContain::getApparentControllingPlayer).
+			const Object *holder = obj->getContainedBy();
+			const ContainModuleInterface *hc = holder ? holder->getContain() : nullptr;
+			if (hc != nullptr)
+			{
+				const Player *app = hc->getApparentControllingPlayer(observing);
+				if (app != nullptr && app != holder->getControllingPlayer())
+					continue;
+			}
+		}
+
+		/*	What the observer is SHOWN, which for two stealth cases is not
+			the truth, and a player sees only the shown version:
+			- a disguised Bomb Truck is drawn as the vehicle it copied, in
+			  that vehicle's owner's colour, until detected or it reveals
+			  itself (StealthUpdate::changeVisualDisguise);
+			- a building garrisoned only by stealthy garrisoners keeps its
+			  original owner and shows no garrison.
+			Allies see the truth in both cases, as the engine draws it. */
+		const ThingTemplate *shownTmpl = tmpl;
+		const Player *shownOwner = owner;
+		Bool shownDisguised = FALSE;
+		Bool hideContents = FALSE;
+		const Bool allied = (observing != nullptr && owner != nullptr &&
+			owner->getRelationship(observing->getDefaultTeam()) == ALLIES);
+		if (observing != nullptr && !isOwn && !allied)
+		{
+			StealthUpdate *st = obj->getStealth();
+			if (st != nullptr && st->canDisguise() && st->isDisguised() &&
+					!obj->testStatus(OBJECT_STATUS_DETECTED) && st->getDisguisedTemplate() != nullptr)
+			{
+				shownTmpl = st->getDisguisedTemplate();
+				const Player *as = ThePlayerList->getNthPlayer(st->getDisguisedPlayerIndex());
+				if (as != nullptr)
+					shownOwner = as;
+				shownDisguised = TRUE;
+			}
+			const ContainModuleInterface *c = obj->getContain();
+			if (c != nullptr)
+			{
+				const Player *app = c->getApparentControllingPlayer(observing);
+				if (app != nullptr && app != owner)
+				{
+					shownOwner = app;
+					hideContents = TRUE;
+				}
+			}
 		}
 
 		const Coord3D *pos = obj->getPosition();
@@ -1722,8 +1784,8 @@ void ObservationServer::buildObservation( std::string &out )
 									 "\"x\":%.1f,\"y\":%.1f,\"z\":%.1f,\"angle\":%.3f,"
 									 "\"hp\":%.1f,\"maxhp\":%.1f,\"own\":%d,\"visible\":%d",
 			(Int)obj->getID(),
-			owner ? owner->getPlayerIndex() : -1,
-			tmpl->getName().str(),
+			shownOwner ? shownOwner->getPlayerIndex() : -1,
+			shownTmpl->getName().str(),
 			pos->x, pos->y, pos->z,
 			obj->getOrientation(),
 			body ? body->getHealth() : 0.0f,
@@ -1771,8 +1833,8 @@ void ObservationServer::buildObservation( std::string &out )
 		const AIUpdateInterface *aiUpd = obj->getAIUpdateInterface();
 		const Real speed = (aiUpd != nullptr) ? aiUpd->getCurLocomotorSpeed() : 0.0f;
 		scratch.format(",\"k\":%u,\"vision\":%.0f,\"range\":%.0f,\"speed\":%.1f",
-			kindMask(tmpl), obj->getVisionRange(),
-			weapon ? weapon->getAttackRange(obj) : 0.0f, speed);
+			kindMask(shownTmpl), obj->getVisionRange(),
+			(weapon && !shownDisguised) ? weapon->getAttackRange(obj) : 0.0f, speed);
 		out += scratch.str();
 
 		// WHAT A NEUTRAL BUILDING IS WORTH, from the engine rather than
@@ -1858,7 +1920,7 @@ void ObservationServer::buildObservation( std::string &out )
 		// "contained" on a tunnel is therefore the whole network's count.
 		if (contain != nullptr && contain->isTunnelContain())
 			out += ",\"tunnel\":1";
-		if (contain != nullptr && contain->getContainCount() > 0)
+		if (contain != nullptr && contain->getContainCount() > 0 && !hideContents)
 		{
 			scratch.format(",\"contained\":%u", contain->getContainCount());
 			out += scratch.str();
@@ -1929,8 +1991,28 @@ void ObservationServer::buildObservation( std::string &out )
 
 		// A stealthed unit we can see is worth flagging: it is only visible
 		// because something of ours is detecting it, and that can lapse.
-		if (obj->testStatus(OBJECT_STATUS_STEALTHED))
+		if (obj->testStatus(OBJECT_STATUS_STEALTHED) && !shownDisguised)
 			out += ",\"stealthed\":1";
+		// Our own (or an ally's) stealthed unit that an enemy has found: the
+		// owner sees it drawn STEALTHLOOK_VISIBLE_FRIENDLY_DETECTED, the
+		// detection overlay "as a warning", and gets a "stealth neutralized"
+		// radar event -- whatever did the detecting, a Spy Satellite scan
+		// included (StealthDetectorUpdate.cpp). For an enemy the flag is
+		// implied: an undetected one is not reported at all.
+		if ((isOwn || allied || observing == nullptr) &&
+				obj->testStatus(OBJECT_STATUS_STEALTHED) && obj->testStatus(OBJECT_STATUS_DETECTED))
+			out += ",\"detected\":1";
+		// A disguised enemy is an ordinary vehicle to us; our own disguised
+		// truck says what it is pretending to be.
+		if ((isOwn || allied) && obj->testStatus(OBJECT_STATUS_DISGUISED))
+		{
+			StealthUpdate *st = obj->getStealth();
+			if (st != nullptr && st->getDisguisedTemplate() != nullptr)
+			{
+				scratch.format(",\"disguise\":\"%s\"", st->getDisguisedTemplate()->getName().str());
+				out += scratch.str();
+			}
+		}
 
 		// A structure still going up is visibly scaffolded, so this is not
 		// privileged information. It matters because hit points alone cannot

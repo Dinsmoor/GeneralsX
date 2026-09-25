@@ -140,13 +140,15 @@ public:
 	Bool allowedToStealth( Object *stealthOwner ) const;
   void receiveGrant( Bool active = TRUE, UnsignedInt frames = 0 );
 
+	// Public for the bot observer: a disguiser is drawn as something else,
+	// never hidden (ObservationServer.cpp).
+	Bool canDisguise() const { return getStealthUpdateModuleData()->m_teamDisguised; }
   Bool isGrantedBySpecialPower() { return getStealthUpdateModuleData()->m_grantedBySpecialPower; }
 	Bool isTemporaryGrant() { return m_framesGranted > 0; }
 
 protected:
 
 	StealthLookType calcStealthedStatusForPlayer(const Object* obj, const Player* player);
-	Bool canDisguise() const { return getStealthUpdateModuleData()->m_teamDisguised; }
 	Real getRevealDistanceFromTarget() const { return getStealthUpdateModuleData()->m_revealDistanceFromTarget; }
 	void hintDetectableWhileUnstealthed() ;
 
