@@ -131,6 +131,7 @@ public:
 	Bool m_observationUnitsOnly;			///< omit map scenery from observations
 	Int m_observationPlayer;				///< player index whose view to report, -1 for omniscient
 	Bool m_observationDebug;				///< append every player's economy to observations (diagnostics only)
+	Bool m_followReplayCamera;			///< -followcamera: replays follow the first player whose camera was saved (a bot's view)
 	Bool m_combatSandbox;						///< allow the action server's "spawn" verb. A bot must NEVER
 																	///< have this: conjuring units is not playing, and doing it
 																	///< mid-match would desync every other client. It exists so a

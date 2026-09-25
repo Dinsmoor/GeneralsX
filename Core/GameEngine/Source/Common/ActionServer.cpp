@@ -33,6 +33,8 @@
 #include "Common/BuildAssistant.h"
 #include "Common/ProductionPrerequisite.h"
 #include "GameClient/ControlBar.h"
+#include "GameClient/View.h"
+#include "Common/Recorder.h"
 
 #include <string>
 #include <vector>
@@ -788,6 +790,91 @@ void ActionServer::executeLine( const char *line )
 
 		AsciiString note;
 		note.format("spawn %d", made);
+		reply("ok", note.str());
+		return;
+	}
+
+	if (strcmp(verb, "camera") == 0)
+	{
+		// Point the bot's camera where its attention is, as a player scrolls
+		// and zooms to what they are dealing with. Two effects, both outside
+		// the simulation:
+		//
+		//  * a rendering engine moves its own view (client side only, like a
+		//    player's scroll -- it never reaches the other machines);
+		//  * in a skirmish or single-player game it is also written into the
+		//    replay as MSG_SET_REPLAY_CAMERA, exactly as the game saves a
+		//    player's camera when "save camera in replays" is on. Watching that
+		//    replay with the player camera followed shows the bot's point of
+		//    view -- even for a -headless match, which has no view at all.
+		//    Never in multiplayer: there every message goes to every peer,
+		//    which is why the game itself saves cameras only offline.
+		//
+		// Angles are degrees on the wire; zoom is the game's own factor
+		// (1.0 = the default height). Omitted values keep the view's own, or
+		// the INI defaults (CameraYaw, CameraPitch, zoom 1) with no view.
+		Real x = 0.0f, y = 0.0f;
+		if (!readReal(line, "x", x) || !readReal(line, "y", y))
+		{
+			reply("error", "camera needs x and y");
+			return;
+		}
+		ViewLocation here;
+		if (TheTacticalView != nullptr)
+			TheTacticalView->getLocation(&here);
+		Real angle = TheTacticalView ? here.getAngle() : DEG_TO_RADF(TheGlobalData->m_cameraYaw);
+		Real pitch = TheTacticalView ? here.getPitch() : DEG_TO_RADF(TheGlobalData->m_cameraPitch);
+		Real zoom = TheTacticalView ? here.getZoom() : 1.0f;
+		Real deg = 0.0f;
+		const Bool hasAngle = readReal(line, "angle", deg);
+		if (hasAngle)
+			angle = DEG_TO_RADF(deg);
+		const Bool hasPitch = readReal(line, "pitch", deg);
+		if (hasPitch)
+			pitch = DEG_TO_RADF(deg);
+		const Bool hasZoom = readReal(line, "zoom", zoom);
+
+		Coord3D pos;
+		pos.x = x;
+		pos.y = y;
+		pos.z = (TheTerrainLogic != nullptr) ? TheTerrainLogic->getGroundHeight(x, y) : 0.0f;
+
+		Bool live = FALSE;
+		if (TheTacticalView != nullptr)
+		{
+			TheTacticalView->userSetPosition(pos);
+			if (hasAngle)
+				TheTacticalView->userSetAngle(angle);
+			if (hasPitch)
+				TheTacticalView->userSetPitch(pitch);
+			if (hasZoom)
+				TheTacticalView->userSetZoom(zoom);
+			live = TRUE;
+		}
+
+		Bool recorded = FALSE;
+		if (TheGameLogic != nullptr && TheRecorder != nullptr && !TheRecorder->isPlaybackMode() &&
+				(TheGameLogic->isInSkirmishGame() || TheGameLogic->isInSinglePlayerGame()))
+		{
+			GameMessage *msg = beginMessage(GameMessage::MSG_SET_REPLAY_CAMERA);
+			if (msg != nullptr)
+			{
+				ICoord2D mouse;
+				mouse.x = 0;
+				mouse.y = 0;
+				msg->appendLocationArgument(pos);
+				msg->appendRealArgument(angle);
+				msg->appendRealArgument(pitch);
+				msg->appendRealArgument(zoom);
+				msg->appendIntegerArgument(0);
+				msg->appendPixelArgument(mouse);
+				TheCommandList->appendMessage(msg);
+				recorded = TRUE;
+			}
+		}
+
+		AsciiString note;
+		note.format("camera live=%d recorded=%d", (Int)live, (Int)recorded);
 		reply("ok", note.str());
 		return;
 	}

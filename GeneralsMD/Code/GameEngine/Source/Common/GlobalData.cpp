@@ -666,6 +666,7 @@ GlobalData::GlobalData()
 	m_observationUnitsOnly = FALSE;
 	m_observationPlayer = -1;
 	m_observationDebug = FALSE;
+	m_followReplayCamera = FALSE;
 	m_combatSandbox = FALSE;
 	m_actionPort = 0;
 	m_actionPlayer = -1;

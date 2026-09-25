@@ -84,6 +84,7 @@
 #include "GameClient/LookAtXlat.h"
 
 #include "GameNetwork/NetworkInterface.h"
+#include "Common/GameUtility.h"
 
 
 
@@ -2348,6 +2349,12 @@ bool GameLogic::onSelfDestruct(MAYBE_UNUSED GameMessage *msg)
 bool GameLogic::onSetReplayCamera(MAYBE_UNUSED GameMessage *msg)
 {
 	Player *msgPlayer = getMessagePlayer(msg);
+
+	// -followcamera: nobody is being watched yet, so watch the player whose
+	// camera this is. Client side only; the replay's logic is unaffected.
+	if (TheRecorder->isPlaybackMode() && TheGlobalData->m_followReplayCamera &&
+			TheControlBar->getObserverLookAtPlayer() == nullptr && msgPlayer != nullptr)
+		rts::changeObservedPlayer(msgPlayer);
 
 	if (TheRecorder->isPlaybackMode() && TheGlobalData->m_useCameraInReplay && TheControlBar->getObserverLookAtPlayer() == msgPlayer)
 	{

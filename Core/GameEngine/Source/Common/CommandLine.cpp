@@ -1121,6 +1121,16 @@ Int parseObservationDebug(char *args[], int num)
 	return 1;
 }
 
+Int parseFollowReplayCamera(char *args[], int num)
+{
+	// Watch a replay through its saved camera without touching the menus: turn
+	// "use camera in replays" on and follow whichever player the camera track
+	// belongs to -- a bot's, recorded by the action server's "camera" verb.
+	TheWritableGlobalData->m_followReplayCamera = TRUE;
+	TheWritableGlobalData->m_useCameraInReplay = TRUE;
+	return 1;
+}
+
 Int parseCombatSandbox(char *args[], int num)
 {
 	// Unlocks the action server's "spawn" verb, for a harness that stages a
@@ -1424,6 +1434,7 @@ static CommandLineParam paramsForStartup[] =
 	{ "-obsunitsonly", parseObservationUnitsOnly },
 	{ "-obsdebug", parseObservationDebug },
 	{ "-sandbox", parseCombatSandbox },
+	{ "-followcamera", parseFollowReplayCamera },
 	{ "-obsplayer", parseObservationPlayer },
 	{ "-actport", parseActionPort },
 	{ "-actplayer", parseActionPlayer },
