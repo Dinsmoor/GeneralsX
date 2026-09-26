@@ -395,6 +395,21 @@ void ActionServer::acceptClient()
 	DEBUG_LOG(("ActionServer: agent connected"));
 }
 
+// ------------------------------------------------------------------------------------------------
+/**	The terrain height under (x, y): what a player's click puts in a build order.
+
+	A placement's legality is decided by PartitionManager::iteratePotentialCollisions,
+	which measures 3D bounding-sphere distance. An order at z = 0 on ground that
+	stands at z = 31 is further than any building's radius from everything on
+	that ground, so the overlap check passed for EVERY site -- on top of the
+	Command Center included -- and the bot put a Barracks inside a War Factory
+	(live LAN match, 2026-09-26). The agent may still pass z explicitly.
+*/
+static Real placementZ( Real x, Real y )
+{
+	return (TheTerrainLogic != nullptr) ? TheTerrainLogic->getGroundHeight(x, y) : 0.0f;
+}
+
 //-------------------------------------------------------------------------------------------------
 void ActionServer::reply( const char *status, const char *detail )
 {
@@ -1280,7 +1295,7 @@ void ActionServer::executeLine( const char *line )
 		Coord3D loc;
 		loc.x = x;
 		loc.y = y;
-		loc.z = 0.0f;
+		loc.z = placementZ(x, y);
 		readReal(line, "z", loc.z);
 
 		Real angle = 0.0f;
@@ -1765,8 +1780,8 @@ void ActionServer::executeLine( const char *line )
 		}
 
 		Coord3D a, b;
-		a.x = x;  a.y = y;  a.z = 0.0f;
-		b.x = x2; b.y = y2; b.z = 0.0f;
+		a.x = x;  a.y = y;  a.z = placementZ(x, y);
+		b.x = x2; b.y = y2; b.z = placementZ(x2, y2);
 
 		Real angle = 0.0f;
 		readReal(line, "angle", angle);
@@ -1821,7 +1836,7 @@ void ActionServer::executeLine( const char *line )
 		Coord3D loc;
 		loc.x = x;
 		loc.y = y;
-		loc.z = 0.0f;
+		loc.z = placementZ(x, y);
 		readReal(line, "z", loc.z);
 
 		Real angle = 0.0f;
