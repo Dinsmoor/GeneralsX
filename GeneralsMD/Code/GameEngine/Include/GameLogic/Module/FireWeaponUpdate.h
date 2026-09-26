@@ -60,6 +60,11 @@ class FireWeaponUpdate : public UpdateModule
 public:
 
 	FireWeaponUpdate( Thing *thing, const ModuleData* moduleData );
+
+	/// The weapon this fires, as authored. For describing the object (the
+	/// observation server reports a hazard field's reach from it); a const
+	/// read of module data, no simulation state.
+	const WeaponTemplate* getWeaponTemplate() const { return getFireWeaponUpdateModuleData()->m_weaponTemplate; }
 	// virtual destructor prototype provided by memory pool declaration
 
 	virtual UpdateSleepTime update() override;

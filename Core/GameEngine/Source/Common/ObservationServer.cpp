@@ -48,6 +48,8 @@
 #include "GameLogic/Module/ContainModule.h"
 #include "GameLogic/Module/StealthUpdate.h"
 #include "GameLogic/Module/SupplyWarehouseDockUpdate.h"
+#include "GameLogic/Module/FireWeaponUpdate.h"
+#include "GameLogic/Module/LifetimeUpdate.h"
 #include <string>
 
 /*	GeneralsX @build Keep winsock2 on Windows; use the shim elsewhere.
@@ -119,8 +121,11 @@ static const KindOfType KIND_BITS[] = {
 	// bot uses against this list): FS_AIRFIELD (both factions' airfields
 	// carry it; its absence once kept the bot from ever building aircraft),
 	// DRONE (drones cannot be sniped or crewed), MINE (dozers and workers
-	// detect only these). The mask is 32 bits: 30 used.
+	// detect only these). The mask is 32 bits: 31 used.
 	KINDOF_FS_AIRFIELD, KINDOF_DRONE, KINDOF_MINE,
+	// A poison or radiation field (anthrax, toxin shells, a nuke): ground
+	// that hurts whatever stands in it, and what an Ambulance cleans.
+	KINDOF_CLEANUP_HAZARD,
 };
 static const char *const KIND_BIT_NAMES[] = {
 	"STRUCTURE", "INFANTRY", "VEHICLE", "AIRCRAFT",
@@ -133,6 +138,7 @@ static const char *const KIND_BIT_NAMES[] = {
 	"GARRISONABLE", "FS_SUPERWEAPON",
 	"SALVAGER", "WEAPON_SALVAGER",
 	"FS_AIRFIELD", "DRONE", "MINE",
+	"HAZARD",
 };
 static const Int KIND_BIT_COUNT = sizeof(KIND_BITS) / sizeof(KIND_BITS[0]);
 // "k" is a 32-bit mask, and the names are the client's only key to it.
@@ -429,7 +435,8 @@ static Bool isTacticallyRelevant( const ThingTemplate *tmpl )
 
 	return tmpl->isKindOf(KINDOF_GARRISONABLE_UNTIL_DESTROYED) ||
 				 tmpl->isKindOf(KINDOF_CAPTURABLE) ||
-				 tmpl->isKindOf(KINDOF_TECH_BUILDING);
+				 tmpl->isKindOf(KINDOF_TECH_BUILDING) ||
+				 tmpl->isKindOf(KINDOF_CLEANUP_HAZARD);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -2102,6 +2109,47 @@ void ObservationServer::buildObservation( std::string &out )
 		// cost nothing in a delta frame.
 		if (salvageCrate)
 			out += ",\"crate\":\"salvage\"";
+
+		// "hazard": a poison or radiation field's real reach, what it does
+		// and until when. The field's geometry is about HALF its reach
+		// (PoisonFieldLarge: geometry 70, weapon radius 140), and sizes run
+		// from a toxin shell's 8 to an Anthrax Bomb's 300, so the footprint
+		// cannot stand in for it. From the field's own FireWeaponUpdate
+		// weapon -- the widest, skipping the anti-stacking HAZARD_CLEANUP
+		// blast every field also carries -- and its LifetimeUpdate. Const
+		// reads only: the delay uses the non-random min/max, never
+		// getDelayBetweenShots(), which draws from the logic RNG.
+		if (obj->isKindOf(KINDOF_CLEANUP_HAZARD))
+		{
+			static const NameKeyType key_fire = NAMEKEY("FireWeaponUpdate");
+			static const NameKeyType key_life = NAMEKEY("LifetimeUpdate");
+			const WeaponTemplate *best = nullptr;
+			Real bestR = 0.0f;
+			for (BehaviorModule **m = obj->getBehaviorModules(); *m; ++m)
+			{
+				if ((*m)->getModuleNameKey() != key_fire)
+					continue;
+				const WeaponTemplate *wt = ((const FireWeaponUpdate *)(*m))->getWeaponTemplate();
+				if (wt == nullptr || wt->getDamageType() == DAMAGE_HAZARD_CLEANUP)
+					continue;
+				const Real r = wt->getPrimaryDamageRadius(WeaponBonus());
+				if (best == nullptr || r > bestR)
+				{
+					best = wt;
+					bestR = r;
+				}
+			}
+			if (best != nullptr)
+			{
+				const Int delay = max<Int>(1, (best->getMinDelayBetweenShots() + best->getMaxDelayBetweenShots()) / 2);
+				const Real dps = best->getPrimaryDamage(WeaponBonus()) * LOGICFRAMES_PER_SECOND / (Real)delay;
+				const UpdateModule *life = obj->findUpdateModule(key_life);
+				const UnsignedInt until = life ? ((const LifetimeUpdate *)life)->getDieFrame() : 0;
+				scratch.format(",\"hazard\":{\"r\":%.0f,\"dps\":%.1f,\"dmg\":%d,\"until\":%u}",
+					bestR, dps, (Int)best->getDamageType(), until);
+				out += scratch.str();
+			}
+		}
 
 		if (isOwn)
 		{
