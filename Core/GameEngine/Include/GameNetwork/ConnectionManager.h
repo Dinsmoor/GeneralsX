@@ -114,6 +114,9 @@ public:
 	UnsignedInt getPacketArrivalCushion();
 
 	UnsignedInt getMinimumCushion();
+	/// The first slot whose commands were missing the last time
+	/// allCommandsReady() said no; -1 if it said yes. For FrameTrace.
+	Int getFirstNotReadySlot() const { return m_firstNotReadySlot; }
 
 	void flushConnections();
 
@@ -182,6 +185,7 @@ private:
 
 	Transport *m_transport;
 	UnsignedInt m_localSlot;
+	Int m_firstNotReadySlot = -1;
 	UnsignedInt m_packetRouterSlot;
 	UnsignedInt m_packetRouterFallback[MAX_SLOTS];
 	UnsignedInt m_localAddr;

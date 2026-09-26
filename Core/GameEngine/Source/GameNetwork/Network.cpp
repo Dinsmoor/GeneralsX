@@ -30,7 +30,8 @@
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+#include "Common/FrameTrace.h"	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/GameEngine.h"
 #include "Common/MessageStream.h"
@@ -750,7 +751,9 @@ void Network::update()
 		endOfGameCheck();
 	}
 
-	if (AllCommandsReady(TheGameLogic->getFrame())) { // If all the commands are ready for the next frame...
+	const Bool allReady = AllCommandsReady(TheGameLogic->getFrame());
+	FrameTrace::ready(allReady, m_conMgr != nullptr ? m_conMgr->getFirstNotReadySlot() : -1);
+	if (allReady) { // If all the commands are ready for the next frame...
 		m_conMgr->handleAllCommandsReady();
 //		DEBUG_LOG(("Network::update - frame %d is ready", TheGameLogic->getFrame()));
 		if (timeForNewFrame()) { // This needs to come after any other pre-frame execution checks as this changes the timing variables.
@@ -825,6 +828,7 @@ Bool Network::timeForNewFrame() {
 	 */
 	if (m_conMgr != nullptr) {
 		Real cushion = m_conMgr->getMinimumCushion();
+		FrameTrace::s_cushion = (UnsignedInt)cushion;
 		Real runAheadPercentage = m_runAhead * (TheGlobalData->m_networkRunAheadSlack / (Real)100.0); // If we are at least 50% into our slack, we need to slow down.
 		if (cushion < runAheadPercentage) {
 			int64_t oldFrameDelay = frameDelay;

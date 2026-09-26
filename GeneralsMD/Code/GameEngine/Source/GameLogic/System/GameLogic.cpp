@@ -27,7 +27,8 @@
 // Author: Michael S. Booth, October 2000
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+#include "Common/FrameTrace.h"	// This must go first in EVERY cpp file in the GameEngine
 
 #ifndef _WIN32
 #include <fenv.h>
@@ -4213,7 +4214,10 @@ void GameLogic::update()
 	// Publish the finished frame before the counter advances, so an agent
 	// observes the state that m_frame currently describes.
 	if (TheObservationServer)
+	{
+		FrameTrace::Scope traceObs(FrameTrace::OBS);
 		TheObservationServer->update();
+	}
 
 	// increment world time
 	if (!m_startNewGame)

@@ -1759,6 +1759,7 @@ Int commandsReadyDebugSpewage = 0;
 Bool ConnectionManager::allCommandsReady(UnsignedInt frame, Bool justTesting /* = FALSE */) {
 	Bool retval = TRUE;
 	FrameDataReturnType frameRetVal = FRAMEDATA_NOTREADY;
+	m_firstNotReadySlot = -1;
 //	retval = FALSE;  // ****for testing purposes only!!!!!!****
 	Int i = 0;
 	for (; (i < MAX_SLOTS) && retval; ++i) {
@@ -1778,9 +1779,11 @@ Bool ConnectionManager::allCommandsReady(UnsignedInt frame, Bool justTesting /* 
 			frameRetVal = m_frameData[i]->allCommandsReady(frame, (frame != commandsReadyDebugSpewage) && (justTesting == FALSE));
 			if (frameRetVal == FRAMEDATA_NOTREADY) {
 				retval = FALSE;
+				m_firstNotReadySlot = i;
 			} else if (frameRetVal == FRAMEDATA_RESEND) {
 				requestFrameDataResend(i, frame);
 				retval = FALSE;
+				m_firstNotReadySlot = i;
 			}
 		}
 	}

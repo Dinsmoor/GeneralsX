@@ -26,7 +26,8 @@
 // Implementation of the Game Engine singleton
 // Author: Michael S. Booth, April 2001
 
-#include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "PreRTS.h"
+#include "Common/FrameTrace.h"	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/ActionManager.h"
 #include "Common/AudioAffect.h"
@@ -1025,13 +1026,17 @@ void GameEngine::update()
 			// VERIFY CRC needs to be in this code block.  Please to not pull TheGameLogic->update() inside this block.
 			VERIFY_CRC
 
-			TheRadar->UPDATE();
+			FrameTrace::loop();
+			{
+				FrameTrace::Scope traceClient(FrameTrace::CLIENT);
+				TheRadar->UPDATE();
 
-			/// @todo Move audio init, update, etc, into GameClient update
+				/// @todo Move audio init, update, etc, into GameClient update
 
-			TheAudio->UPDATE();
-			TheGameClient->UPDATE();
-			TheMessageStream->propagateMessages();
+				TheAudio->UPDATE();
+				TheGameClient->UPDATE();
+				TheMessageStream->propagateMessages();
+			}
 
 			// TheSuperHackers @fix An external agent's orders must be on
 			// TheCommandList BEFORE Network::update drains it, or they are
@@ -1042,8 +1047,12 @@ void GameEngine::update()
 			if (TheNetwork != nullptr)
 			{
 				if (TheActionServer != nullptr)
+				{
+					FrameTrace::Scope traceAct(FrameTrace::ACT);
 					TheActionServer->update();
+				}
 
+				FrameTrace::Scope traceNet(FrameTrace::NET);
 				TheNetwork->UPDATE();
 			}
 
@@ -1058,12 +1067,21 @@ void GameEngine::update()
 		// TheSuperHackers @info Ignores frozen time because the script engine needs updating in the logic update regardless.
 		if (canUpdateGameLogic(FramePacer::IgnoreFrozenTime))
 		{
-			TheGameLogic->UPDATE();
+			{
+				FrameTrace::Scope traceLogic(FrameTrace::LOGIC);
+				TheGameLogic->UPDATE();
+			}
 
 			if (!TheFramePacer->isTimeFrozen())
 			{
+				FrameTrace::Scope traceClient(FrameTrace::CLIENT);
 				TheGameClient->step();
 			}
+
+			// Network games only: the question FrameTrace answers is who held
+			// the lockstep, and a skirmish has no lockstep.
+			if (TheNetwork != nullptr)
+				FrameTrace::frame(TheGameLogic->getFrame(), TheNetwork->getRunAhead(), TheNetwork->getFrameRate());
 		}
 	}
 }
