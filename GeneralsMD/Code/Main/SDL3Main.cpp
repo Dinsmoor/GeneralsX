@@ -36,6 +36,7 @@
 #include <cstring>
 #include <cstdio>
 #include <unistd.h>   // _exit()
+#include <csignal>    // signal(SIGPIPE, SIG_IGN)
 #include <glob.h>     // glob() for Vulkan ICD discovery
 
 // USER INCLUDES (match WinMain.cpp pattern)
@@ -235,6 +236,16 @@ GameEngine *CreateGameEngine(void)
 int main(int argc, char* argv[])
 {
 	int exitcode = 1;
+
+	// GeneralsX @bugfix Dinsmoor 25/09/2026 Ignore SIGPIPE.
+	// Writing to a socket whose peer has closed raises SIGPIPE on POSIX, and
+	// its default action kills the process. Windows has no such signal, so the
+	// engine's socket code only ever handles the error return. A bot's agent
+	// exits when it is defeated; the engine's next observation write then
+	// killed it mid-match (exit 141), and every other player in the LAN game
+	// was left waiting on a peer that vanished. Ignored, send() fails with
+	// EPIPE and the observation server drops the agent as it always did.
+	signal(SIGPIPE, SIG_IGN);
 
 	// TheSuperHackers @build felipebraz 13/02/2026
 	// Store command line arguments in globals for CommandLine.cpp parser
