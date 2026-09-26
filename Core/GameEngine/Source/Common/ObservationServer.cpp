@@ -1590,11 +1590,14 @@ void ObservationServer::buildObservation( std::string &out )
 			if (!firstDbg)
 				out += ',';
 			firstDbg = FALSE;
-			scratch.format("{\"index\":%d,\"money\":%d,\"earned\":%d,\"score\":%d,\"units_built\":%d}",
+			scratch.format("{\"index\":%d,\"money\":%d,\"earned\":%d,\"spent\":%d,\"score\":%d,"
+										 "\"units_built\":%d,\"buildings_built\":%d}",
 				player->getPlayerIndex(), player->getMoney()->countMoney(),
 				score ? score->getTotalMoneyEarned() : 0,
+				score ? score->getTotalMoneySpent() : 0,
 				score ? score->calculateScore() : 0,
-				score ? score->getTotalUnitsBuilt() : 0);
+				score ? score->getTotalUnitsBuilt() : 0,
+				score ? score->getTotalBuildingsBuilt() : 0);
 			out += scratch.str();
 		}
 		out += ']';
