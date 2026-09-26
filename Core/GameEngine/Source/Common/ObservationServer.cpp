@@ -1974,6 +1974,16 @@ void ObservationServer::buildObservation( std::string &out )
 				ai->isAttacking() ? 1 : 0);
 			out += scratch.str();
 
+			// What it is shooting at: the engine's own choice, which under
+			// attack-move is not what the bot ordered. A pure lookup of
+			// m_currentVictimID (no RNG, no state), so it is sync-safe.
+			const Object *victim = ai->getCurrentVictim();
+			if (victim != nullptr && ai->isAttacking())
+			{
+				scratch.format(",\"vic\":%u", (unsigned)victim->getID());
+				out += scratch.str();
+			}
+
 			if (isOwn || observing == nullptr)
 			{
 				const Coord3D *goal = ai->getGoalPosition();
