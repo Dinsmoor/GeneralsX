@@ -1862,19 +1862,26 @@ void ActionServer::executeLine( const char *line )
 			return;
 		}
 
+		LegalBuildCode code = TheBuildAssistant->isLocationLegalToBuild(
+			&loc, tmpl, angle, options, builder, player);
+
 		// The dozer drops a construct order outright when the bank is short
 		// (DozerAIUpdate::construct -> BuildAssistant::canMakeUnit), and did so
 		// silently behind an "ok" from here: the agent logged "starting" for a
 		// building the engine had already discarded. Say so instead.
-		if (builder != nullptr &&
+		//
+		// AFTER the location, not before: asked first, "no money" answered for
+		// every site while the bank was short, the geometry was never checked,
+		// and the agent read a list of "no money" as "every site legal, just
+		// waiting for cash" -- then walked a dozer to a Supply Center site with
+		// a supply pile inside its footprint and was refused when the money
+		// came (2026-09-26). A site is reported "no money" only if it is legal.
+		if (code == LBC_OK && builder != nullptr &&
 				TheBuildAssistant->canMakeUnit(builder, tmpl) == CANMAKE_NO_MONEY)
 		{
 			reply("no", "no money");
 			return;
 		}
-
-		LegalBuildCode code = TheBuildAssistant->isLocationLegalToBuild(
-			&loc, tmpl, angle, options, builder, player);
 
 		static const char *codeNames[] = {
 			"ok", "restricted_terrain", "not_flat_enough", "objects_in_the_way",
