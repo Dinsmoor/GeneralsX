@@ -1141,6 +1141,17 @@ Int parseCombatSandbox(char *args[], int num)
 	return 1;
 }
 
+Int parseObservationSync(char *args[], int num)
+{
+	// Lockstep with the agent: every frame waits for the agent's "tick" for
+	// the last observation. Only honoured with -sandbox (the combat lab):
+	// flat out, a headless engine does not wait for the agent, so how many
+	// frames pass before it answers depends on machine load, and the same
+	// fight measured 29 s one run and 48 s the next.
+	TheWritableGlobalData->m_observationSync = TRUE;
+	return 1;
+}
+
 Int parseObservationUnitsOnly(char *args[], int num)
 {
 	TheWritableGlobalData->m_observationUnitsOnly = TRUE;
@@ -1434,6 +1445,10 @@ static CommandLineParam paramsForStartup[] =
 	{ "-obsunitsonly", parseObservationUnitsOnly },
 	{ "-obsdebug", parseObservationDebug },
 	{ "-sandbox", parseCombatSandbox },
+	{ "-obssync", parseObservationSync },
+	// Out of the RTS_DEBUG-only table: a release skirmish needs a fixed seed
+	// too (the combat lab; repeatable A/B matches). SkirmishLauncher reads it.
+	{ "-seed", parseSeed },
 	{ "-followcamera", parseFollowReplayCamera },
 	{ "-obsplayer", parseObservationPlayer },
 	{ "-actport", parseActionPort },
@@ -1617,7 +1632,6 @@ static CommandLineParam paramsForEngineInit[] =
 	{ "-shellmap", parseShellMap },
 	{ "-winCursors", parseWinCursors },
 	{ "-constantDebug", parseConstantDebug },
-	{ "-seed", parseSeed },
 	{ "-noagpfix", parseIncrAGPBuf },
 	{ "-noFPSLimit", parseNoFPSLimit },
 	{ "-dumpAssetUsage", parseDumpAssetUsage },

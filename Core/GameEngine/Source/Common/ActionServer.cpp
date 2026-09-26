@@ -11,6 +11,7 @@
 #include "PreRTS.h"
 
 #include "Common/ActionServer.h"
+#include "Common/ObservationServer.h"   // -obssync: the last observation sent
 #include "Common/GlobalData.h"
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
@@ -288,6 +289,7 @@ ActionServer::ActionServer()
 	m_pending = nullptr;
 	m_budgetFrame = 0;
 	m_queuedThisFrame = 0;
+	m_ackedFrame = 0;
 }
 
 ActionServer::~ActionServer()
@@ -2308,6 +2310,18 @@ void ActionServer::update()
 	if (m_clientSocket == (UnsignedInt)INVALID_SOCKET)
 	{
 		acceptClient();
+		// -obssync: the action client too, before any frame runs without it
+		// (see ObservationServer::update).
+		if (TheGlobalData->m_combatSandbox && TheGlobalData->m_observationSync &&
+				TheObservationServer != nullptr && TheObservationServer->hasClient())
+		{
+			const UnsignedInt start = timeGetTime();
+			while (m_clientSocket == (UnsignedInt)INVALID_SOCKET && timeGetTime() - start < 60000)
+			{
+				Sleep(1);
+				acceptClient();
+			}
+		}
 		if (m_clientSocket == (UnsignedInt)INVALID_SOCKET)
 			return;
 	}
@@ -2315,6 +2329,28 @@ void ActionServer::update()
 	receive();
 	if (m_clientSocket == (UnsignedInt)INVALID_SOCKET)
 		return;
+
+	// LOCKSTEP FOR THE COMBAT LAB (-sandbox -obssync). Hold this frame until
+	// the agent has said it is done with the last observation: it sends
+	// {"action":"tick","frame":F} after its orders for F. The ticks are taken
+	// out of the buffer here, ahead of the orders, so the per-frame order
+	// budget below cannot hold a tick back and deadlock the wait. Bounded:
+	// an agent that never ticks costs 10 s a frame, not a hang.
+	if (TheGlobalData->m_combatSandbox && TheGlobalData->m_observationSync &&
+			TheObservationServer != nullptr && TheObservationServer->hasClient())
+	{
+		const UnsignedInt need = TheObservationServer->lastSentFrame();
+		const UnsignedInt start = timeGetTime();
+		takeTicks();
+		while (m_ackedFrame < need && timeGetTime() - start < 10000)
+		{
+			Sleep(1);
+			receive();
+			if (m_clientSocket == (UnsignedInt)INVALID_SOCKET)
+				return;
+			takeTicks();
+		}
+	}
 
 	// Execute the lines received so far, leaving any partial line -- AND any
 	// order beyond this frame's budget -- in the buffer for the next frame.
@@ -2393,6 +2429,50 @@ void ActionServer::update()
 		if (added > 0)
 			m_queuedThisFrame += added;
 	}
+}
+
+Bool ActionServer::takeTicks()
+{
+	const char *buf = m_pending->str();
+	if (strstr(buf, "\"tick\"") == nullptr)
+		return FALSE;
+	std::string keep;
+	const char *p = buf;
+	Bool any = FALSE;
+	for (;;)
+	{
+		const char *nl = strchr(p, '\n');
+		if (nl == nullptr)
+		{
+			keep += p;			// a partial line stays for the next receive
+			break;
+		}
+		std::string line(p, nl - p);
+		if (line.find("\"action\":\"tick\"") != std::string::npos ||
+				line.find("\"action\": \"tick\"") != std::string::npos)
+		{
+			const size_t f = line.find("\"frame\"");
+			if (f != std::string::npos)
+			{
+				const size_t colon = line.find(':', f);
+				if (colon != std::string::npos)
+				{
+					const UnsignedInt fr = (UnsignedInt)strtoul(line.c_str() + colon + 1, nullptr, 10);
+					if (fr > m_ackedFrame)
+						m_ackedFrame = fr;
+					any = TRUE;
+				}
+			}
+		}
+		else
+		{
+			keep += line;
+			keep += '\n';
+		}
+		p = nl + 1;
+	}
+	*m_pending = keep.c_str();
+	return any;
 }
 
 /**

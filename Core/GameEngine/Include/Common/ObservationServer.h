@@ -49,6 +49,11 @@ public:
 
 	Bool isEnabled() const { return m_enabled; }
 
+	/// The frame of the last observation sent, and whether an agent is on the
+	/// line to have received it (-obssync lockstep, ActionServer::update).
+	UnsignedInt lastSentFrame() const { return m_lastSentFrame; }
+	Bool hasClient() const { return m_clientSocket != (UnsignedInt)~0u && m_sentMap; }
+
 	/**
 		Emit the observation for the current frame, if a client is connected
 		and the frame interval has elapsed. Called once per logic frame.

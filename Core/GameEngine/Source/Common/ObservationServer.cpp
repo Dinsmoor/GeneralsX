@@ -2476,6 +2476,19 @@ void ObservationServer::update()
 	if (m_clientSocket == INVALID_SOCKET)
 	{
 		acceptClient();
+		// -sandbox -obssync (the combat lab): no frame runs before the agent
+		// is here, or how many frames ran without it -- the skirmish AI's
+		// and the RNG's state at the first observation -- depends on how
+		// fast it connected. Bounded at 60 s.
+		if (TheGlobalData->m_combatSandbox && TheGlobalData->m_observationSync)
+		{
+			const UnsignedInt start = timeGetTime();
+			while (m_clientSocket == INVALID_SOCKET && timeGetTime() - start < 60000)
+			{
+				Sleep(1);
+				acceptClient();
+			}
+		}
 		if (m_clientSocket == INVALID_SOCKET)
 			return;	// no agent listening, so nothing to serialize
 	}

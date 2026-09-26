@@ -95,6 +95,11 @@ private:
 	UnsignedInt		m_budgetFrame;			///< the logic frame m_queuedThisFrame belongs to
 	Int				m_queuedThisFrame;		///< AIGroup-minting messages queued during m_budgetFrame
 
+	/// -obssync: the last frame the agent has sent "tick" for.
+	UnsignedInt		m_ackedFrame;
+	/// Pull "tick" lines out of m_pending (they are not orders); TRUE if any.
+	Bool			takeTicks();
+
 };
 
 extern ActionServer *TheActionServer;	///< singleton instance

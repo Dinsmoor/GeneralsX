@@ -136,6 +136,9 @@ public:
 																	///< have this: conjuring units is not playing, and doing it
 																	///< mid-match would desync every other client. It exists so a
 																	///< harness can stage a controlled fight and measure the result.
+	Bool m_observationSync;					///< -obssync (with -sandbox only): hold each frame until the agent
+																	///< has sent "tick" for the last observation. Lockstep for the
+																	///< combat lab, so a measurement does not depend on machine load.
 	UnsignedShort m_actionPort;			///< TCP port for the action server, 0 to disable
 	Int m_actionPlayer;					///< player index the action server issues orders as
 	AsciiString m_skirmishSlots;		///< comma separated slot spec, empty to disable -skirmish
