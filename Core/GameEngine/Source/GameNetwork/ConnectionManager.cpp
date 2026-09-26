@@ -1451,7 +1451,16 @@ void ConnectionManager::updateRunAhead(Int oldRunAhead, Int frameRate, Bool didS
 			}
 
 			// TheSuperHackers @info this clamps the logic time scale fps in network games
-			minFps = clamp<Int>(MIN_LOGIC_FRAMES, minFps, TheGlobalData->m_framesPerSecondLimit);
+			// Dinsmoor @bugfix 26/09/2026 Never above the logic rate. The cap was the
+			// RENDER limit, which GeneralsX defaults to 60, while the slowest player's
+			// rate below stays capped at 30 -- so the slowest peer ran logic at 30 and
+			// every other peer at up to 60, used up its run-ahead, and froze for
+			// 150-2000 ms waiting, every few seconds (FrameTrace, 2026-09-26: bots at
+			// a 17 ms median frame gap, the host at 33, 60 s of waiting each in 2
+			// minutes). Retail's render limit was 30, so the two caps agreed there.
+			// Rendering is decoupled from logic and still runs at its own limit.
+			const Int maxNetworkFps = min<Int>(TheGlobalData->m_framesPerSecondLimit, LOGICFRAMES_PER_SECOND);
+			minFps = clamp<Int>(MIN_LOGIC_FRAMES, minFps, maxNetworkFps);
 			DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("ConnectionManager::updateRunAhead - minFps after adjustment is %d", minFps));
 
 			// TheSuperHackers @bugfix Mauller 21/08/2025 calculate the runahead so it always follows the latency
@@ -1524,8 +1533,8 @@ void ConnectionManager::updateRunAhead(Int oldRunAhead, Int frameRate, Bool didS
 			if (newMinFps == minFps) {
 				newMinFps = minFps + 1;
 			}
-			if (newMinFps > 30) {
-				newMinFps = 30; // Cap FPS to 30.
+			if (newMinFps > maxNetworkFps) {
+				newMinFps = maxNetworkFps; // Cap FPS to 30 -- the same cap as everyone else's, above.
 			}
 			msg2->setRunAhead(newRunAhead);
 			msg2->setFrameRate(newMinFps);
